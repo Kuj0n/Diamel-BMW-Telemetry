@@ -107,6 +107,16 @@ Skrypt czyta tylko sterowniki z listy `CAR_ECUS` (dla innego auta zmień ją - n
 - [ ] Profile innych aut (np. OBD-II dla aut spoza BMW)
 - [ ] Stabilność obrazu przy dużym obciążeniu pamięci PSRAM (ekran ładowania)
 
+## Licencja
+
+[PolyForm Noncommercial 1.0.0](LICENSE.md) - © 2026 Diamel ([diamel.pl](https://diamel.pl)).
+
+- **Wolno** (cele niekomercyjne): pobrać, zbudować urządzenie dla siebie, używać, uczyć się, modyfikować i dzielić się zmianami - z dołączeniem licencji i informacji o autorze.
+- **Nie wolno**: używać komercyjnie - w szczególności sprzedawać oprogramowania ani urządzeń z nim, ani używać go w działalności zarobkowej.
+- Licencja komercyjna - kontakt przez [diamel.pl](https://diamel.pl).
+
+Wiążący jest angielski tekst licencji w [LICENSE.md](LICENSE.md).
+
 ## Uwagi
 
 Projekt hobbystyczny, bez związku z BMW AG. Nazwy BMW, xDrive itp. są znakami towarowymi ich właścicieli. Używasz na własną odpowiedzialność - urządzenie tylko czyta dane, ale podłączasz je do magistrali diagnostycznej auta.
