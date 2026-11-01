@@ -4,7 +4,7 @@ Wyświetlacz telemetrii do BMW serii F (testowany projekt: **F31 320d xDrive, si
 
 **Tylko odczyt.** Urządzenie niczego w aucie nie zapisuje, nie koduje i nie kasuje błędów. Blokada jest w kodzie: na magistralę mogą trafić wyłącznie usługi odczytu (UDS 0x22, 0x19, 0x3E).
 
-> Status: **wersja rozwojowa (0.12)**. Interfejs, katalog parametrów, Wi-Fi i strona WWW działają w trybie DEMO. Odczyt z auta przez CAN jest zaimplementowany, ale **nie był jeszcze testowany w samochodzie**.
+> Status: **wersja rozwojowa (0.13)**. Interfejs, katalog parametrów, Wi-Fi i strona WWW działają w trybie DEMO. Odczyt z auta przez CAN jest zaimplementowany, ale **nie był jeszcze testowany w samochodzie**.
 
 <!-- Zrzuty ekranu: docs/screenshots/ (zrób je funkcją "Zrzut ekranu" na stronie WWW urządzenia) -->
 
@@ -82,7 +82,7 @@ Kolejne wersje możesz wgrywać bez kabla: strona WWW → *System* → *Aktualiz
 ### Pierwsze uruchomienie
 
 1. Na ekranie: Menu → **Wi-Fi** → *Włącz*. Zeskanuj kod QR telefonem i otwórz adres z ekranu (`http://192.168.4.1`).
-2. W zakładce **System** wgraj katalog parametrów (patrz niżej) i uruchom urządzenie ponownie (Info → *Uruchom ponownie*).
+2. W zakładce **System** wgraj katalog parametrów (patrz niżej) i naciśnij *Uruchom ponownie* (Wi-Fi włączy się po restarcie samo).
 3. W **Ustawieniach** wybierz tryb pracy **CAN - gniazdo OBD**, a w menu naciśnij **Start**.
 
 ## Katalog parametrów
@@ -93,7 +93,7 @@ Opisy parametrów i błędów pochodzą z plików opisu sterowników BMW (`.prg`
 python tools/wyciagnij_f31.py <folder_z_plikami_prg> <folder_wyjsciowy>
 ```
 
-Skrypt czyta tylko sterowniki z listy `CAR_ECUS` (dla innego auta zmień ją - nazwy plików SGBD pokaże np. identyfikacja pojazdu w BimmerDeepOBD), bierze adresy z `T_GRTB.PRG`, wyciąga parametry odczytu (usługa 0x22) z tabel oraz - przez `tools/best_dekoder.py` - z kodu zadań diagnostycznych (np. skrzynia rozdzielcza xDrive), a nazwy tłumaczy na polski. Wynik (`moduly.csv`, `parametry.csv`, `teksty.csv`, `bledy_XX.csv`) wgrywasz przez stronę WWW: *System* → *Katalog parametrów* - trafia na kartę do `/diamel`.
+Skrypt czyta tylko sterowniki z listy `CAR_ECUS` (dla innego auta zmień ją - nazwy plików SGBD pokaże np. identyfikacja pojazdu w BimmerDeepOBD), bierze adresy z `T_GRTB.PRG`, wyciąga parametry odczytu (usługa 0x22) z tabel oraz - przez `tools/best_dekoder.py` - z kodu zadań diagnostycznych (np. skrzynia rozdzielcza xDrive), a nazwy tłumaczy na polski. Wynik to 4 pliki: `moduly.csv`, `parametry.csv`, `teksty.csv` i `bledy.csv` (wszystkie kody błędów w jednym pliku). Pierwsza linia każdego pliku zawiera wersję katalogu i datę wygenerowania - widać je w Info i na stronie WWW. Pliki wgrywasz przez stronę WWW: *System* → *Katalog parametrów* (trafiają na kartę do `/diamel`), potem naciskasz *Uruchom ponownie*.
 
 ## Do zrobienia
 

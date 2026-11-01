@@ -5,6 +5,7 @@
 #include "clock.h"
 #include "power.h"
 #include "settings.h"
+#include "wifi_web.h"
 
 // --- Strona Ustawienia: przewijana lista, każda zmiana zapisywana automatycznie ---
 
@@ -184,6 +185,7 @@ static void backup_save_cb(lv_event_t *) {
 }
 
 static void restart_later(lv_timer_t *) {
+    wifi_prepare_restart();
     ESP.restart();
 }
 

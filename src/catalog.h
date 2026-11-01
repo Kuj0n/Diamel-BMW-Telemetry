@@ -48,7 +48,9 @@ struct CatalogStatus {
     uint32_t skipped;   // pominięte (tekst/bajty - nie liczby)
     uint16_t text_tables;
     uint32_t texts;
-    uint16_t dtc_files;
+    uint16_t dtc_files;   // stary układ: pliki bledy_XX.csv; nowy: 1 (bledy.csv)
+    uint32_t dtc_codes;   // kody błędów w bledy.csv
+    char meta[96];        // pierwsza linia "# ..." katalogu: wersja, data, auto
     uint32_t load_ms;
     char error[64];
 };

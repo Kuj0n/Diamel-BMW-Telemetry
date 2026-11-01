@@ -8,6 +8,7 @@
 #include "logger.h"
 #include "settings.h"
 #include "touch_gt911.h"
+#include "wifi_web.h"
 
 // --- Strona Info: wersja, autor, stan sprzętu i test toru CAN ---
 static lv_obj_t *lbl_hw;
@@ -80,6 +81,7 @@ static void restart_cb(lv_event_t *) {
         return;
     }
     settings_flush();
+    wifi_prepare_restart();
     ESP.restart();
 }
 
@@ -93,11 +95,19 @@ static void catalog_refresh() {
         lv_label_set_text(lbl_modules, "Pliki wgrasz przez WWW: System > Katalog parametrow.");
         return;
     }
+    unsigned basic = 0;
+    for (int m = 1; m < modules_count(); m++) basic += module_def(m).basic_count;
+    char dtc[48];
+    if (cs.dtc_codes) snprintf(dtc, sizeof(dtc), "%u (bledy.csv)", (unsigned)cs.dtc_codes);
+    else snprintf(dtc, sizeof(dtc), "%u plikow bledy_XX.csv (stary uklad)", cs.dtc_files);
+    // Lista podstawowa = wszystkie parametry -> katalog bez kolumny "poziom" (starsza wersja pliku)
     lv_label_set_text_fmt(lbl_catalog,
-                          "Parametry: %u z %u modulow\nPominiete (tekst / bajty): %u\n"
-                          "Opisy wartosci: %u (tabel: %u)\nPliki kodow bledow: %u\nCzas wczytania: %u ms%s%s",
-                          (unsigned)cs.params, cs.modules, (unsigned)cs.skipped, (unsigned)cs.texts, cs.text_tables,
-                          cs.dtc_files, (unsigned)cs.load_ms, cs.error[0] ? "\nUwaga: " : "", cs.error);
+                          "%s\nParametry: %u z %u modulow, podstawowe: %u%s\nPominiete (tekst / bajty): %u\n"
+                          "Opisy wartosci: %u (tabel: %u)\nKody bledow: %s\nCzas wczytania: %u ms%s%s",
+                          cs.meta[0] ? cs.meta : "Katalog bez wersji (starszy - wygeneruj i wgraj nowy)",
+                          (unsigned)cs.params, cs.modules, basic, basic == cs.params ? " (brak podzialu!)" : "",
+                          (unsigned)cs.skipped, (unsigned)cs.texts, cs.text_tables, dtc, (unsigned)cs.load_ms,
+                          cs.error[0] ? "\nUwaga: " : "", cs.error);
     lv_obj_set_style_text_color(lbl_catalog, COLOR_TEXT, 0);
 
     // Moduły: adres, nazwa, liczba parametrów i kodów błędów

@@ -577,6 +577,7 @@ static lv_obj_t *load_label;
 
 static void loading_done(lv_anim_t *) {
     splash_dark(nullptr);
+    wifi_resume_after_restart();
 }
 
 static void loading_tick(lv_timer_t *t) {

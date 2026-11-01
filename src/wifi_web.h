@@ -11,6 +11,8 @@ enum WifiState : uint8_t { WSTATE_OFF, WSTATE_CONNECTING, WSTATE_OWN, WSTATE_HOM
 #define MDNS_NAME "diamel" // w sieci domowej: http://diamel.local
 
 bool wifi_start(); // własna sieć: ok. 0.5 s; sieć domowa: łączenie w tle (20 s, potem własna sieć)
+void wifi_prepare_restart();      // przed ESP.restart(): zapamiętuje, czy Wi-Fi było włączone
+bool wifi_resume_after_restart(); // przy starcie: włącza Wi-Fi, jeśli było włączone przed restartem
 void wifi_stop();
 bool wifi_active();
 WifiState wifi_state();

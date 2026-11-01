@@ -61,6 +61,9 @@ static size_t ota_written = 0;
 static size_t ota_total = 0;
 static volatile bool restart_pending = false;
 static uint32_t restart_ms = 0;
+// Przeżywa ESP.restart(): Wi-Fi włączone przed restartem (z ekranu albo strony WWW) wraca samo
+#define WIFI_RESUME_MAGIC 0xD1A3E1F1
+static RTC_NOINIT_ATTR uint32_t wifi_resume;
 static const char *volatile message = NULL;
 
 // Strona WWW (jeden plik, bez zewnętrznych zasobów - telefon nie ma internetu w sieci ESP32)
@@ -159,10 +162,10 @@ progress{width:100%;height:18px}
 <p class="hint">Gdy sieci domowej nie ma (np. w aucie), po 20 s wlacza sie wlasna siec wyswietlacza. W sieci domowej strona jest pod adresem z ekranu urzadzenia albo http://diamel.local</p>
 <div id="wmsg" class="msg"></div>
 <h3>KATALOG PARAMETROW (KARTA SD /diamel)</h3>
-<p class="hint">Pliki .csv z folderu docs/private/diamel_f31 (zaznacz wszystkie). Plik o tej samej nazwie zostanie zastapiony.</p>
+<p class="hint">4 pliki .csv z wygenerowanego katalogu: moduly, parametry, teksty, bledy (zaznacz wszystkie). Plik o tej samej nazwie zostanie zastapiony. Stare pliki bledy_XX.csv mozna usunac - nowy bledy.csv je zastepuje.</p>
 <div id="clist"></div>
 <input type="file" id="cfiles" accept=".csv" multiple>
-<p><button class="btn pri" id="cupload">Wgraj pliki</button> <button class="btn del" id="cclear">Usun katalog</button></p>
+<p><button class="btn pri" id="cupload">Wgraj pliki</button> <button class="btn del" id="cclear">Usun katalog</button> <button class="btn" id="reboot">Uruchom ponownie</button></p>
 <progress id="cprog" max="100" value="0" hidden></progress>
 <div id="cmsg" class="msg"></div>
 <h3>ZRZUT EKRANU I NAGRANIE</h3>
@@ -176,7 +179,7 @@ progress{width:100%;height:18px}
 <p><button class="btn" id="rupload">Wgraj kopie</button></p>
 <div id="rmsg" class="msg"></div>
 <h3>AKTUALIZACJA OPROGRAMOWANIA</h3>
-<p class="hint">Plik firmware.bin z katalogu .pio/build/esp32-s3 projektu. Po wgraniu urzadzenie uruchomi sie ponownie, a Wi-Fi bedzie wylaczone.</p>
+<p class="hint">Plik firmware.bin z katalogu .pio/build/esp32-s3 projektu. Po wgraniu urzadzenie uruchomi sie ponownie (Wi-Fi wlaczy sie samo).</p>
 <input type="file" id="fw" accept=".bin">
 <p><button class="btn pri" id="upload">Wgraj</button></p>
 <progress id="prog" max="100" value="0" hidden></progress>
@@ -304,7 +307,9 @@ async function catalog(){const l=$('#clist');
  try{const d=await j('/api/catalog');l.innerHTML='';
   if(!d.sd){l.append(el('p','hint','Brak karty SD.'));return}
   if(!d.files.length)l.append(el('p','hint','Katalog pusty.'));
-  d.files.forEach(f=>{const r=el('div','row');r.append(el('span','n',f[0]),el('span','s',size(f[1])));
+  d.files.forEach(f=>{const r=el('div','row'),n=el('span','n',f[0]);
+   if(f[2]){n.append(el('br'),el('span','s',f[2].replace('Diamel katalog;','').replace(/;/g,', ')))}
+   r.append(n,el('span','s',size(f[1])));
    const x=el('button','btn del','Usun');x.onclick=async()=>{if(!confirm('Usunac '+f[0]+'?'))return;
     try{await post('/api/catalog_delete',{f:f[0]})}catch(e){alert(e.message)}catalog()};
    r.append(x);l.append(r)})}
@@ -315,10 +320,13 @@ $('#cupload').onclick=()=>{const fs=$('#cfiles').files,m=$('#cmsg'),pr=$('#cprog
  const x=new XMLHttpRequest();x.open('POST','/api/catalog');
  x.upload.onprogress=e=>{if(e.lengthComputable)pr.value=e.loaded*100/e.total};
  x.onload=()=>{m.className=x.status==200?'msg':'msg err';m.style.whiteSpace='pre-line';
-  m.textContent=x.responseText+(x.status==200?'\nUruchom urzadzenie ponownie (Info > Uruchom ponownie), aby wczytac katalog.':'');
+  m.textContent=x.responseText+(x.status==200?'\nNacisnij Uruchom ponownie, aby wczytac katalog.':'');
   $('#cupload').disabled=false;catalog()};
  x.onerror=()=>{m.className='msg err';m.textContent='Przerwano polaczenie.';$('#cupload').disabled=false};
  pr.hidden=false;pr.value=0;m.textContent='';$('#cupload').disabled=true;x.send(fd)};
+$('#reboot').onclick=async()=>{if(!confirm('Uruchomic urzadzenie ponownie?'))return;
+ const m=$('#cmsg');try{await post('/api/restart',{});m.className='msg';m.textContent='Restart... strona polaczy sie ponownie za ok. 20 s.';setTimeout(()=>location.reload(),20000)}
+ catch(e){m.className='msg err';m.textContent='Blad: '+e.message}};
 $('#cclear').onclick=async()=>{if(!confirm('Usunac caly katalog parametrow z karty?'))return;
  try{await post('/api/catalog_clear',{})}catch(e){alert(e.message)}catalog()};
 
@@ -755,6 +763,13 @@ static void catalog_list(JsonArray files) {
             JsonArray e = files.add<JsonArray>();
             e.add(f.name());
             e.add((uint32_t)f.size());
+            // Pierwsza linia "# Diamel katalog;wersja=..;data=..": wersja i data pliku
+            char meta[96];
+            int n = f.readBytes(meta, sizeof(meta) - 1);
+            meta[n > 0 ? n : 0] = 0;
+            char *nl = strpbrk(meta, "\r\n");
+            if (nl) *nl = 0;
+            e.add(meta[0] == '#' ? meta + 1 : "bez wersji (starszy plik)");
         }
         f.close();
     }
@@ -800,10 +815,24 @@ static void handle_catalog_upload(AsyncWebServerRequest *req, const String &file
         if (!cat_file) return cat_fail(filename, "nie mozna utworzyc pliku na karcie");
     }
     if (!cat_file) return;
-    if (len && cat_file.write(data, len) != len) {
+    // Karta potrafi chwilowo przyjąć mniej bajtów (zajęta magistrala SPI) - dopisujemy resztę kilka razy
+    size_t done = 0;
+    for (int attempt = 0; done < len && attempt < 5; attempt++) {
+        if (attempt) {
+            Serial.printf("Katalog: %s - zapis %u/%u B przy %u, ponawiam\n", filename.c_str(), (unsigned)done,
+                          (unsigned)len, (unsigned)index);
+            delay(20);
+        }
+        done += cat_file.write(data + done, len - done);
+    }
+    if (done < len) {
+        int err = errno;
         cat_file.close();
         SD.remove(CATALOG_TMP);
-        return cat_fail(filename, "blad zapisu na karte (pelna karta?)");
+        char why[96];
+        snprintf(why, sizeof(why), "blad zapisu na karte przy %u B (zapisano %u z %u, kod %d)", (unsigned)index,
+                 (unsigned)done, (unsigned)len, err);
+        return cat_fail(filename, why);
     }
     if (final) {
         cat_file.close();
@@ -846,6 +875,14 @@ static void handle_catalog_clear(AsyncWebServerRequest *req) {
     }
     for (int i = 0; i < count; i++) SD.remove(String(CATALOG_DIR) + "/" + names[i]);
     req->send(200, "text/plain", "OK");
+}
+
+// Restart ze strony WWW (np. po wgraniu katalogu) - po wysłaniu odpowiedzi i zamknięciu logu
+static void handle_restart(AsyncWebServerRequest *req) {
+    if (ota_progress >= 0 && ota_progress < 100) return req->send(409, "text/plain", "Trwa aktualizacja");
+    req->send(200, "text/plain", "OK");
+    message = "Restart ze strony WWW";
+    restart_pending = true;
 }
 
 static void handle_format(AsyncWebServerRequest *req) {
@@ -954,6 +991,7 @@ static void setup_routes() {
     server.on("/api/delete", HTTP_POST, handle_delete);
     server.on("/api/delete_all", HTTP_POST, handle_delete_all);
     server.on("/api/format", HTTP_POST, handle_format);
+    server.on("/api/restart", HTTP_POST, handle_restart);
     server.on("/api/catalog", HTTP_GET, handle_catalog);
     server.on("/api/catalog", HTTP_POST, handle_catalog_done, handle_catalog_upload);
     server.on("/api/catalog_clear", HTTP_POST, handle_catalog_clear);
@@ -1014,6 +1052,16 @@ bool wifi_start() {
         return true;
     }
     return start_own_network();
+}
+
+void wifi_prepare_restart() {
+    wifi_resume = wifi_active() ? WIFI_RESUME_MAGIC : 0;
+}
+
+bool wifi_resume_after_restart() {
+    bool resume = esp_reset_reason() == ESP_RST_SW && wifi_resume == WIFI_RESUME_MAGIC;
+    wifi_resume = 0;
+    return resume && wifi_start();
 }
 
 void wifi_stop() {
@@ -1126,6 +1174,7 @@ void wifi_tick() {
     }
     if (millis() - restart_ms > RESTART_DELAY_MS && !logger_active()) {
         settings_flush();
+        wifi_prepare_restart();
         Serial.println("OTA: restart");
         Serial.flush();
         ESP.restart();

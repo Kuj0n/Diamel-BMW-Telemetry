@@ -22,6 +22,7 @@ Przeliczenie wartości w urządzeniu:
     wartość = surowa * mnoznik + przesuniecie
 Typy: U8 S8 U16 S16 U32 S32 F32 F64, STRn (tekst n bajtów), HEXn (bajty n), n=0 -> do końca odpowiedzi.
 """
+import datetime
 import re
 import struct
 import sys
@@ -32,6 +33,10 @@ import best_dekoder  # noqa: E402  odczyty zaszyte w kodzie zadań (np. xDrive L
 
 HEADER_MAGIC = b"@EDIABAS OBJECT"
 XOR_KEY = 0xF7
+
+# Wersja formatu katalogu (urządzenie pokazuje ją w Info) i opis auta w nagłówku plików
+CATALOG_VERSION = 2
+VEHICLE = "BMW F31 B47 xDrive"
 
 # Sterowniki wykryte w aucie: SGBD -> polska nazwa modułu
 CAR_ECUS = {
@@ -610,7 +615,7 @@ def main():
     for r in grtb.get("ZUORDNUNGSTABELLEUDS", []):
         addr_of.setdefault(r["SGBD"].upper(), r["ADR_INDEX"].split()[0].upper())
 
-    modules, all_params, all_texts = [], [], []
+    modules, all_params, all_texts, all_dtcs = [], [], [], []
     for sgbd, label in CAR_ECUS.items():
         adres = addr_of.get(sgbd, "")
         path = find_file(prg_dir, sgbd)
@@ -639,11 +644,9 @@ def main():
                 text = ascii_text(r.get("ORTTEXT", ""), 160)
                 if re.fullmatch(r"[0-9A-F]{6}", code) and text:
                     dtcs.append((code, kind, text))
-        if adres and dtcs:
-            with open(out_dir / f"bledy_{adres}.csv", "w", encoding="utf-8", newline="\n") as f:
-                f.write("kod;rodzaj;opis\n")
-                for code, kind, text in sorted(set(dtcs)):
-                    f.write(f"{code};{kind};{text}\n")
+        dtcs = sorted(set(dtcs))
+        if adres:
+            all_dtcs += [(adres, code, kind, text) for code, kind, text in dtcs]
 
         all_params += ex.params
         for tname, entries in ex.text_tables.items():
@@ -652,11 +655,19 @@ def main():
         modules.append([adres, sgbd, label, str(len(ex.params)), str(len(dtcs)), ", ".join(note)])
         print(f"[OK] {sgbd:9} {adres:2}  parametry: {len(ex.params):5}  bledy: {len(dtcs):5}  {', '.join(note)}")
 
+    # Pierwsza linia każdego pliku: wersja i data (urządzenie pomija linie z "#", pokazuje je w Info/WWW)
+    meta = (f"# Diamel katalog;wersja={CATALOG_VERSION};data={datetime.datetime.now():%Y-%m-%d %H:%M};"
+            f"auto={VEHICLE}\n")
+    for old in out_dir.glob("bledy_*.csv"):  # stare pliki sprzed scalenia w bledy.csv
+        old.unlink()
+
     with open(out_dir / "moduly.csv", "w", encoding="utf-8", newline="\n") as f:
+        f.write(meta)
         f.write("adres;sgbd;nazwa;parametry;bledy;uwagi\n")
         for m in sorted(modules):
             f.write(";".join(m) + "\n")
     with open(out_dir / "parametry.csv", "w", encoding="utf-8", newline="\n") as f:
+        f.write(meta)
         f.write("adres;klucz;nazwa;did;typ;pozycja;maska;kolejnosc;mnoznik;przesuniecie;jednostka;miejsca;teksty;opis;"
                 "poziom\n")
         basic = 0
@@ -671,9 +682,17 @@ def main():
             f.write(";".join(row) + "\n")
     print(f"Lista podstawowa: {basic} parametrow (pozostale w 'wszystkie')")
     with open(out_dir / "teksty.csv", "w", encoding="utf-8", newline="\n") as f:
+        f.write(meta)
         f.write("adres;tabela;wartosc;tekst\n")
         for t in all_texts:
             f.write(";".join(t) + "\n")
+    # Wszystkie kody błędów w jednym pliku, po adresie modułu (urządzenie robi z niego indeks)
+    with open(out_dir / "bledy.csv", "w", encoding="utf-8", newline="\n") as f:
+        f.write(meta)
+        f.write("adres;kod;rodzaj;opis\n")
+        for d in sorted(all_dtcs):
+            f.write(";".join(d) + "\n")
+    print(f"Kody bledow: {len(all_dtcs)} w bledy.csv")
     print(f"\nRazem: {len(all_params)} parametrow, {len(all_texts)} opisow wartosci -> {out_dir}")
 
 

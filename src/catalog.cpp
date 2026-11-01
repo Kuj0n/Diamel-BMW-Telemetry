@@ -34,6 +34,13 @@ static int ntexts, texts_cap;
 
 static CatalogStatus st;
 static volatile uint32_t bytes_done, bytes_total; // postęp wczytywania
+
+// Indeks bledy.csv: dla każdego adresu modułu początek jego linii w pliku i liczba kodów
+struct DtcIndex {
+    uint32_t offset;
+    uint16_t count;
+};
+static DtcIndex dtc_index[256];
 static volatile bool done;
 static SemaphoreHandle_t done_sem;
 
@@ -99,18 +106,34 @@ class LineReader {
                 }
             }
             char c = buf_[pos_++];
+            offset_++;
             if (c == '\n') break;
             if (c != '\r' && n + 1 < max) line[n++] = c;
         }
         line[n] = 0;
         return true;
     }
+    // Pozycja początku następnej linii (od miejsca, w którym zaczęło się czytanie)
+    uint32_t offset() const { return offset_; }
 
   private:
     File &f_;
     char buf_[4096];
     int len_ = 0, pos_ = 0;
+    uint32_t offset_ = 0;
 };
+
+// Linie z "#" na początku pliku: wersja i data katalogu (pierwsza zapamiętana do Info); potem nagłówek kolumn
+static void read_header(LineReader &r, char *line, size_t max) {
+    while (r.next(line, max)) {
+        if (line[0] != '#') return; // to był nagłówek kolumn
+        if (!st.meta[0]) {
+            const char *m = line + 1;
+            while (*m == ' ') m++;
+            strlcpy(st.meta, m, sizeof(st.meta));
+        }
+    }
+}
 
 static int split(char *line, char **fields, int max) {
     int n = 0;
@@ -150,7 +173,7 @@ static void load_modules() {
     if (!f) return;
     LineReader r(f);
     char line[LINE_LEN], *fl[8];
-    r.next(line, sizeof(line)); // nagłówek
+    read_header(r, line, sizeof(line));
     while (r.next(line, sizeof(line))) {
         if (split(line, fl, 8) < 5) continue;
         add_module((uint8_t)strtoul(fl[0], nullptr, 16), fl[1], fl[2], (uint16_t)atoi(fl[4]));
@@ -163,7 +186,7 @@ static void load_texts() {
     if (!f) return;
     LineReader r(f);
     char line[LINE_LEN], *fl[6];
-    r.next(line, sizeof(line));
+    read_header(r, line, sizeof(line));
     while (r.next(line, sizeof(line))) {
         if (split(line, fl, 6) < 4) continue;
         uint8_t addr = (uint8_t)strtoul(fl[0], nullptr, 16);
@@ -213,7 +236,7 @@ static void load_params() {
     }
     LineReader r(f);
     char line[LINE_LEN], *fl[16];
-    r.next(line, sizeof(line));
+    read_header(r, line, sizeof(line));
     while (r.next(line, sizeof(line))) {
         if ((st.params & 127) == 0) vTaskDelay(1); // przerwa dla ekranu (wspólna szyna PSRAM)
         // adres;klucz;nazwa;did;typ;pozycja;maska;kolejnosc;mnoznik;przesuniecie;jednostka;miejsca;teksty;opis
@@ -252,6 +275,29 @@ static void load_params() {
     f.close();
 }
 
+// bledy.csv (adres;kod;rodzaj;opis), ułożony po adresie - zapamiętujemy, gdzie zaczyna się każdy moduł
+static bool index_dtc_file() {
+    File f = open_catalog("bledy.csv");
+    if (!f) return false;
+    LineReader r(f);
+    char line[LINE_LEN], *fl[5];
+    read_header(r, line, sizeof(line));
+    uint32_t pos = r.offset();
+    while (r.next(line, sizeof(line))) {
+        if (split(line, fl, 5) >= 4) {
+            DtcIndex &d = dtc_index[strtoul(fl[0], nullptr, 16) & 0xFF];
+            if (!d.count) d.offset = pos;
+            d.count++;
+            st.dtc_codes++;
+        }
+        if ((st.dtc_codes & 255) == 0) vTaskDelay(1); // przerwa dla ekranu (wspólna szyna PSRAM)
+        pos = r.offset();
+    }
+    f.close();
+    st.dtc_files = 1;
+    return true;
+}
+
 static void load_task(void *) {
     uint32_t t0 = millis();
     if (!logger_sd_ok()) {
@@ -259,7 +305,7 @@ static void load_task(void *) {
     } else if (!SD.exists(CATALOG_DIR)) {
         strlcpy(st.error, "Brak katalogu /diamel na karcie", sizeof(st.error));
     } else {
-        static const char *const FILES[] = {"moduly.csv", "teksty.csv", "parametry.csv"};
+        static const char *const FILES[] = {"moduly.csv", "teksty.csv", "parametry.csv", "bledy.csv"};
         for (const char *name : FILES) {
             File f = open_catalog(name);
             if (f) {
@@ -282,13 +328,16 @@ static void load_task(void *) {
             m.count++;
             m.basic_count += params[i].basic;
         }
-        for (int m = 1; m < nmodules; m++) {
-            char name[24];
-            snprintf(name, sizeof(name), "bledy_%02X.csv", modules[m].addr);
-            File f = open_catalog(name);
-            if (f) {
-                st.dtc_files++;
-                f.close();
+        if (!index_dtc_file()) {
+            // Starszy katalog: osobny plik błędów dla każdego modułu
+            for (int m = 1; m < nmodules; m++) {
+                char name[24];
+                snprintf(name, sizeof(name), "bledy_%02X.csv", modules[m].addr);
+                File f = open_catalog(name);
+                if (f) {
+                    st.dtc_files++;
+                    f.close();
+                }
             }
         }
         st.modules = nmodules - 1;
@@ -297,9 +346,11 @@ static void load_task(void *) {
         st.loaded = st.params > 0;
     }
     st.load_ms = millis() - t0;
-    Serial.printf("Katalog: modulow %u, parametrow %u (pominietych %u), opisow %u, plikow bledow %u, %u ms%s%s\n",
-                  st.modules, (unsigned)st.params, (unsigned)st.skipped, (unsigned)st.texts, st.dtc_files,
-                  (unsigned)st.load_ms, st.error[0] ? ", " : "", st.error);
+    Serial.printf("Katalog: %s\n", st.meta[0] ? st.meta : "bez naglowka wersji (starszy katalog)");
+    Serial.printf("Katalog: modulow %u, parametrow %u (pominietych %u), opisow %u, kodow bledow %u (plikow %u), "
+                  "%u ms%s%s\n",
+                  st.modules, (unsigned)st.params, (unsigned)st.skipped, (unsigned)st.texts, (unsigned)st.dtc_codes,
+                  st.dtc_files, (unsigned)st.load_ms, st.error[0] ? ", " : "", st.error);
     st.done = true;
     done = true;
     xSemaphoreGive(done_sem);
@@ -421,42 +472,55 @@ int params_search(int module, const char *query, int offset, ParamIdx *out, int 
     return total;
 }
 
-static File open_dtc_file(uint8_t addr) {
+// Kody błędów modułu po kolei: fn(kod, rodzaj "F"/"I", opis) -> false = koniec.
+// Nowy katalog: fragment bledy.csv z indeksu; starszy: osobny plik bledy_XX.csv.
+template <typename Fn>
+static void for_each_dtc(uint8_t addr, Fn fn) {
+    char line[LINE_LEN], *fl[5];
+    const DtcIndex &d = dtc_index[addr];
+    if (d.count) {
+        File f = open_catalog("bledy.csv");
+        if (!f || !f.seek(d.offset)) return;
+        LineReader r(f);
+        for (int i = 0; i < d.count && r.next(line, sizeof(line)); i++) {
+            if (split(line, fl, 5) < 4) continue;
+            if (!fn(strtoul(fl[1], nullptr, 16), fl[2], fl[3])) break;
+        }
+        f.close();
+        return;
+    }
     char name[24];
     snprintf(name, sizeof(name), "bledy_%02X.csv", addr);
-    return open_catalog(name);
+    File f = open_catalog(name);
+    if (!f) return;
+    LineReader r(f);
+    read_header(r, line, sizeof(line));
+    while (r.next(line, sizeof(line))) {
+        if (split(line, fl, 4) < 3) continue;
+        if (!fn(strtoul(fl[0], nullptr, 16), fl[1], fl[2])) break;
+    }
+    f.close();
 }
 
 void catalog_dtc_texts(uint8_t addr, const uint32_t *codes, int n, char (*out)[DTC_TEXT_LEN]) {
     for (int i = 0; i < n; i++) out[i][0] = 0;
-    File f = open_dtc_file(addr);
-    if (!f) return;
-    LineReader r(f);
-    char line[LINE_LEN], *fl[4];
-    r.next(line, sizeof(line));
-    while (r.next(line, sizeof(line))) {
-        if (split(line, fl, 4) < 3) continue;
-        uint32_t code = strtoul(fl[0], nullptr, 16);
+    // Plik ułożony po kodzie, "F" (pamięć błędów) przed "I" - pierwszy opis wygrywa
+    for_each_dtc(addr, [&](uint32_t code, const char *, const char *text) {
         for (int i = 0; i < n; i++) {
-            if (codes[i] == code && !out[i][0]) strlcpy(out[i], fl[2], DTC_TEXT_LEN);
+            if (codes[i] == code && !out[i][0]) strlcpy(out[i], text, DTC_TEXT_LEN);
         }
-    }
-    f.close();
+        return true;
+    });
 }
 
 int catalog_dtc_samples(uint8_t addr, uint32_t *codes, int max) {
-    File f = open_dtc_file(addr);
-    if (!f) return 0;
-    LineReader r(f);
-    char line[LINE_LEN], *fl[4];
-    r.next(line, sizeof(line));
     int n = 0, row = 0;
     // Co 37. błąd od 15. - pierwsze wpisy to zwykle ogólne komunikaty (tryb oszczędzania energii itp.)
-    while (n < max && r.next(line, sizeof(line))) {
-        if (split(line, fl, 4) < 3 || strcmp(fl[1], "F") != 0) continue;
-        if (row >= 15 && (row - 15) % 37 == 0) codes[n++] = strtoul(fl[0], nullptr, 16);
+    for_each_dtc(addr, [&](uint32_t code, const char *kind, const char *) {
+        if (strcmp(kind, "F") != 0) return true;
+        if (row >= 15 && (row - 15) % 37 == 0) codes[n++] = code;
         row++;
-    }
-    f.close();
+        return n < max;
+    });
     return n;
 }
