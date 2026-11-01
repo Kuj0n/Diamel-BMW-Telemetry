@@ -27,6 +27,7 @@ struct ParamDef {
     uint8_t type;      // ParamType
     uint8_t decimals;
     uint8_t big_endian;
+    uint8_t basic;     // 1 = lista podstawowa (kolumna "poziom"); stary katalog bez kolumny = wszystko podstawowe
 };
 
 struct ModuleDef {
@@ -36,6 +37,7 @@ struct ModuleDef {
     uint16_t first; // pierwszy parametr modułu w rejestrze
     uint16_t count;
     uint16_t dtc_count;
+    uint16_t basic_count; // parametry z listy podstawowej
 };
 
 struct CatalogStatus {
@@ -53,6 +55,7 @@ struct CatalogStatus {
 
 void catalog_begin();                 // po logger_init(): wbudowane parametry + zadanie wczytujące
 bool catalog_wait(uint32_t timeout_ms);
+int catalog_progress();                // 0-100 % wczytanych plików (pasek na ekranie startowym)
 void catalog_status(CatalogStatus &out);
 
 int params_count();
@@ -68,10 +71,13 @@ const char *param_value_text(ParamIdx i, float value);
 uint32_t param_ref(ParamIdx i);
 ParamIdx param_by_ref(uint32_t ref);
 inline bool ref_is_catalog(uint32_t ref) { return (ref >> 24) != 0; }
+// Czytelna nazwa do kopii ustawień: "12:motordrehzahl_wert" (katalog) albo "demo:0" (DEMO) i z powrotem
+void param_name_key(ParamIdx i, char *buf, size_t len);
+ParamIdx param_by_name_key(const char *text);
 
-// Wyszukiwanie w module (-1 = wszystkie) po nazwie lub kluczu, bez wielkości liter.
-// Zapisuje trafienia od `offset` (max `max`), zwraca łączną liczbę trafień.
-int params_search(int module, const char *query, int offset, ParamIdx *out, int max);
+// Wyszukiwanie w module (-1 = wszystkie) po nazwie lub kluczu, bez wielkości liter; all = false: tylko lista
+// podstawowa. Zapisuje trafienia od `offset` (max `max`), zwraca łączną liczbę trafień.
+int params_search(int module, const char *query, int offset, ParamIdx *out, int max, bool all);
 
 // Opisy kodów błędów z /diamel/bledy_XX.csv (czyta kartę - nie z zadania UI)
 #define DTC_TEXT_LEN 120

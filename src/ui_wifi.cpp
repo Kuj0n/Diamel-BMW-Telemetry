@@ -22,10 +22,16 @@ static lv_obj_t *overlay_bar;
 static lv_obj_t *overlay_lbl;
 
 // Kod QR w formacie rozpoznawanym przez aparat telefonu (Android/iOS): dołącz do sieci
+// W sieci domowej kod QR z adresem strony
+static WifiState qr_state = WSTATE_OFF;
+static lv_obj_t *dd_mode;
+
 static void update_qr() {
     char text[80];
-    snprintf(text, sizeof(text), "WIFI:T:WPA;S:%s;P:%s;;", wifi_ssid(), g_settings.wifi_pass);
+    if (wifi_state() == WSTATE_HOME) snprintf(text, sizeof(text), "http://%s", wifi_ip());
+    else snprintf(text, sizeof(text), "WIFI:T:WPA;S:%s;P:%s;;", wifi_ssid(), g_settings.wifi_pass);
     lv_qrcode_update(qr, text, strlen(text));
+    qr_state = wifi_state();
 }
 
 static void set_pass_button(bool confirm) {
@@ -36,9 +42,18 @@ static void set_pass_button(bool confirm) {
 
 void wifi_page_refresh() {
     bool on = wifi_active();
-    char buf[160];
+    WifiState st = wifi_state();
+    char buf[200];
     if (starting) {
         snprintf(buf, sizeof(buf), "Uruchamianie...");
+    } else if (st == WSTATE_CONNECTING) {
+        snprintf(buf, sizeof(buf), "Laczenie z siecia:\n%s\n(do 20 s, potem\nwlasna siec)", g_settings.home_ssid);
+    } else if (st == WSTATE_HOME) {
+        snprintf(buf, sizeof(buf), "Siec domowa:\n%s\nAdres:\nhttp://%s\nhttp://%s.local", g_settings.home_ssid,
+                 wifi_ip(), MDNS_NAME);
+    } else if (!on && g_settings.wifi_mode == WIFI_MODE_HOME) {
+        snprintf(buf, sizeof(buf), "Wi-Fi wylaczone.\n\nSiec domowa:\n%s",
+                 g_settings.home_ssid[0] ? g_settings.home_ssid : "nie ustawiona -\nprzycisk Siec");
     } else if (on) {
         snprintf(buf, sizeof(buf), "Siec:\n%s\nHaslo:\n%s\nAdres:\nhttp://%s\nPolaczone: %u", wifi_ssid(),
                  g_settings.wifi_pass, wifi_ip(), wifi_clients());
@@ -49,7 +64,8 @@ void wifi_page_refresh() {
     set_text_if_changed(lbl_toggle, on ? LV_SYMBOL_WIFI " Wylacz" : LV_SYMBOL_WIFI " Wlacz");
     lv_obj_set_style_bg_color(btn_toggle, on ? COLOR_ON : COLOR_BTN, 0);
 
-    if (on) lv_obj_clear_flag(qr_box, LV_OBJ_FLAG_HIDDEN);
+    if (on && st != WSTATE_CONNECTING && st != qr_state) update_qr();
+    if (on && st != WSTATE_CONNECTING) lv_obj_clear_flag(qr_box, LV_OBJ_FLAG_HIDDEN);
     else lv_obj_add_flag(qr_box, LV_OBJ_FLAG_HIDDEN);
     // Nowe hasło tylko przy wyłączonym Wi-Fi; w trakcie aktualizacji nie wyłączamy sieci
     if (on) lv_obj_add_state(btn_pass, LV_STATE_DISABLED);
@@ -79,6 +95,21 @@ static void toggle_cb(lv_event_t *) {
     wifi_page_refresh();
 }
 
+static void home_cb(lv_event_t *) {
+    ui_show(PAGE_WIFI_HOME);
+}
+
+// Tryb: własna sieć / sieć domowa (nazwę i hasło sieci domowej: przycisk "Siec" albo strona WWW)
+static void mode_cb(lv_event_t *e) {
+    g_settings.wifi_mode = (uint8_t)lv_dropdown_get_selected(lv_event_get_target(e));
+    settings_mark_dirty();
+    if (g_settings.wifi_mode == WIFI_MODE_HOME && !g_settings.home_ssid[0]) {
+        ui_toast("Ustaw siec domowa: przycisk Siec");
+    }
+    wifi_restart(); // tylko gdy Wi-Fi jest włączone
+    wifi_page_refresh();
+}
+
 static void new_pass_cb(lv_event_t *) {
     if (!pass_confirm) {
         set_pass_button(true);
@@ -101,10 +132,22 @@ void wifi_page_build(lv_obj_t *page) {
     lv_obj_align(btn_pass, LV_ALIGN_TOP_RIGHT, -20, 14);
     set_pass_button(false);
 
+    dd_mode = lv_dropdown_create(page);
+    lv_dropdown_set_options(dd_mode, "Wlasna siec\nSiec domowa");
+    lv_dropdown_set_selected(dd_mode, g_settings.wifi_mode);
+    lv_obj_set_style_text_font(dd_mode, &lv_font_montserrat_16, 0);
+    lv_obj_set_size(dd_mode, 150, 40);
+    lv_obj_set_pos(dd_mode, 20, 72);
+    lv_obj_add_event_cb(dd_mode, mode_cb, LV_EVENT_VALUE_CHANGED, NULL);
+    // Sieć domowa: nazwa i hasło z klawiatury ekranowej
+    lv_obj_t *home_btn = make_button(page, "Siec", home_cb, NULL);
+    lv_obj_set_size(home_btn, 80, 40);
+    lv_obj_set_pos(home_btn, 176, 72);
+
     lbl_info = make_label(page, &lv_font_montserrat_20, COLOR_TEXT, "");
-    lv_obj_set_width(lbl_info, 230);
+    lv_obj_set_width(lbl_info, 240);
     lv_label_set_long_mode(lbl_info, LV_LABEL_LONG_WRAP);
-    lv_obj_set_pos(lbl_info, 20, 84);
+    lv_obj_set_pos(lbl_info, 20, 122);
 
     // Biała ramka wokół kodu - telefony gorzej czytają kod bez jasnego marginesu
     qr_box = plain_cont(page);
@@ -118,10 +161,9 @@ void wifi_page_build(lv_obj_t *page) {
     update_qr();
 
     lv_obj_t *hint = make_label(page, &lv_font_montserrat_16, COLOR_FAINT,
-                                "1. Zeskanuj kod aparatem telefonu (polaczenie z siecia).\n"
-                                "2. Otworz w przegladarce adres podany obok.\n"
-                                "Podglad na zywo, pobieranie logow, wybor odczytow i aktualizacja "
-                                "oprogramowania. Wi-Fi pozostaje wlaczone do recznego wylaczenia.");
+                                "Wlasna siec: zeskanuj kod aparatem telefonu, potem otworz adres.\n"
+                                "Siec domowa: kod QR prowadzi prosto do strony. Siec ustawisz przyciskiem Siec albo na "
+                                "stronie WWW (System > Wi-Fi); gdy jej nie ma, po 20 s wlacza sie wlasna siec.");
     lv_obj_set_width(hint, SCREEN_W - 40);
     lv_label_set_long_mode(hint, LV_LABEL_LONG_WRAP);
     lv_obj_align(hint, LV_ALIGN_BOTTOM_LEFT, 20, -12);

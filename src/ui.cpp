@@ -14,11 +14,11 @@ extern const lv_img_dsc_t diamel_logo;
 extern const lv_img_dsc_t bmw_logo;
 
 #define UI_REFRESH_MS 100
-#define SWIPE_PAGES 3 // LIVE, CHART, DTC - kolejne kafelki tileview
+#define SWIPE_PAGES 3 // Odczyty 1-3 - kolejne kafelki tileview
 
 static const char *PAGE_TITLES[PAGE_COUNT] = {
-    "Menu", "Odczyty", "Wykres", "Bledy", "Pliki", "Wi-Fi", "Ustawienia", "Wybor odczytow", "Wybierz wartosc",
-    "Informacje", "Adapter BLE"};
+    "Menu", "Odczyty", "Odczyty", "Odczyty", "Wykres", "Bledy", "Pliki", "Wi-Fi", "Ustawienia", "Wybor odczytow",
+    "Wybierz wartosc", "Informacje", "Adapter BLE", "Siec domowa"};
 
 static lv_obj_t *page_obj[PAGE_COUNT]; // kontener strony (dla stron przesuwanych - kafelek)
 static lv_obj_t *tileview;
@@ -82,7 +82,7 @@ lv_color_t module_color(int module) {
 }
 
 static bool is_swipe_page(Page p) {
-    return p == PAGE_LIVE || p == PAGE_CHART || p == PAGE_DTC;
+    return p >= PAGE_LIVE && p <= PAGE_LIVE3;
 }
 
 // --- Nawigacja ---
@@ -111,6 +111,7 @@ void ui_show(Page page) {
     if (page == PAGE_INFO) info_page_open();
     if (page == PAGE_WIFI) wifi_page_refresh();
     if (page == PAGE_BLE) ble_page_open();
+    if (page == PAGE_WIFI_HOME) wifi_home_page_open();
 }
 
 // --- Krótki komunikat na dole ekranu (znika 2.5 s po ostatnim komunikacie) ---
@@ -358,7 +359,7 @@ static void apply_web_settings() {
     uint16_t old_chart[CHART_SERIES_MAX];
     memcpy(old_chart, g_settings.chart_series, sizeof(old_chart));
     if (!wifi_apply_web_settings()) return;
-    live_rebuild();
+    live_rebuild_all();
     live_editor_open();
     if (memcmp(old_chart, g_settings.chart_series, sizeof(old_chart)) != 0) chart_rebuild();
     settings_page_sync();
@@ -380,7 +381,7 @@ static void build_banner() {
 }
 
 static void banner_refresh() {
-    bool data_page = active_page == PAGE_LIVE || active_page == PAGE_CHART;
+    bool data_page = is_swipe_page(active_page) || active_page == PAGE_CHART;
     CommState st = comm_state();
     if (!data_page || g_settings.data_source == SRC_DEMO || (comm_running() && st == COMM_RUNNING)) {
         lv_obj_add_flag(banner, LV_OBJ_FLAG_HIDDEN);
@@ -450,13 +451,16 @@ static void refresh_cb(lv_timer_t *) {
 
     // Etykiety aktualizujemy tylko na widocznej stronie
     switch (active_page) {
-        case PAGE_LIVE:     live_refresh(); break;
+        case PAGE_LIVE:
+        case PAGE_LIVE2:
+        case PAGE_LIVE3:    live_refresh(active_page - PAGE_LIVE); break;
         case PAGE_CHART:    chart_refresh_labels(); break;
         case PAGE_INFO:     info_page_refresh(); break;
         case PAGE_WIFI:     wifi_page_refresh(); break;
         case PAGE_DTC:      dtc_page_refresh(); break;
         case PAGE_SETTINGS: settings_page_refresh(); break;
         case PAGE_BLE:      ble_page_refresh(); break;
+        case PAGE_WIFI_HOME: wifi_home_page_refresh(); break;
         default: break;
     }
     rec_refresh();
@@ -505,7 +509,7 @@ static void build_main() {
     }
 
     build_menu(page_obj[PAGE_MENU]);
-    live_build(page_obj[PAGE_LIVE]);
+    for (int i = 0; i < SWIPE_PAGES; i++) live_build(i, page_obj[PAGE_LIVE + i]);
     chart_build(page_obj[PAGE_CHART]);
     dtc_page_build(page_obj[PAGE_DTC]);
     files_page_build(page_obj[PAGE_FILES]);
@@ -515,6 +519,7 @@ static void build_main() {
     picker_build(page_obj[PAGE_PICKER]);
     info_page_build(page_obj[PAGE_INFO]);
     ble_page_build(page_obj[PAGE_BLE]);
+    wifi_home_page_build(page_obj[PAGE_WIFI_HOME]);
     build_status_bar();
     build_toast();
     build_perf_label();
@@ -528,6 +533,8 @@ static void build_main() {
     lv_scr_load(scr);
     lv_obj_del(old);
     lv_timer_create(refresh_cb, UI_REFRESH_MS, NULL);
+    // Pierwsza pełna klatka rysowana przy zgaszonym podświetleniu - ekran rozjaśnia się dopiero po niej
+    lv_refr_now(NULL);
 
     Serial.printf("Interfejs gotowy: wolny RAM wewn. %u KB (najwiekszy blok %u KB), PSRAM %u KB\n",
                   (unsigned)(heap_caps_get_free_size(MALLOC_CAP_INTERNAL) / 1024),
@@ -562,8 +569,43 @@ static void splash_dark(lv_anim_t *) {
     backlight_fade(0, g_settings.brightness, 300, NULL);
 }
 
+// --- Ekran ładowania katalogu (po logo) ---
+// Katalog czyta się dopiero tutaj: wczytywanie w trakcie logo (duże obrazy z flasha + zapis do PSRAM)
+// przeciążało wspólną szynę pamięci i obraz przeskakiwał.
+static lv_obj_t *load_bar;
+static lv_obj_t *load_label;
+
+static void loading_done(lv_anim_t *) {
+    splash_dark(nullptr);
+}
+
+static void loading_tick(lv_timer_t *t) {
+    int p = catalog_progress();
+    lv_bar_set_value(load_bar, p, LV_ANIM_OFF);
+    lv_label_set_text_fmt(load_label, "Wczytywanie katalogu parametrow... %d%%", p);
+    if (!catalog_wait(0)) return;
+    lv_timer_del(t);
+    backlight_fade(g_settings.brightness, 0, 200, loading_done);
+}
+
+static void loading_start(lv_anim_t *) {
+    lv_obj_add_flag(splash_diamel, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_t *scr = lv_scr_act();
+    load_label = make_label(scr, &lv_font_montserrat_20, COLOR_TEXT, "Wczytywanie katalogu parametrow...");
+    lv_obj_align(load_label, LV_ALIGN_CENTER, 0, -30);
+    load_bar = lv_bar_create(scr);
+    lv_obj_set_size(load_bar, 360, 16);
+    lv_obj_set_style_bg_color(load_bar, COLOR_ACCENT, LV_PART_INDICATOR);
+    lv_obj_align(load_bar, LV_ALIGN_CENTER, 0, 10);
+    lv_obj_t *hint = make_label(scr, &lv_font_montserrat_16, COLOR_DIM, "karta SD: /diamel");
+    lv_obj_align(hint, LV_ALIGN_CENTER, 0, 45);
+    catalog_begin();
+    backlight_fade(0, g_settings.brightness, 200, NULL);
+    lv_timer_create(loading_tick, 100, NULL);
+}
+
 static void splash_end(lv_timer_t *) {
-    backlight_fade(g_settings.brightness, 0, 300, splash_dark);
+    backlight_fade(g_settings.brightness, 0, 300, loading_start);
 }
 
 static void splash_bmw_dark(lv_anim_t *) {
@@ -587,8 +629,8 @@ void ui_init() {
     lv_obj_t *scr = lv_scr_act();
     lv_obj_set_style_bg_color(scr, COLOR_BG, 0);
 
-    // Oś czasu: BMW rozjaśnia się (0-0.6 s), gaśnie (1.6-2.0 s),
-    // Diamel rozjaśnia się (2.0-2.7 s), przejście do stron od 4.3 s
+    // Oś czasu: BMW rozjaśnia się (0-0.6 s), gaśnie (1.6-2.0 s), Diamel rozjaśnia się (2.0-2.7 s),
+    // od 4.3 s ekran ładowania katalogu z paskiem postępu, potem strony
     splash_bmw = splash_image(scr, &bmw_logo);
     splash_diamel = splash_image(scr, &diamel_logo);
     lv_obj_add_flag(splash_diamel, LV_OBJ_FLAG_HIDDEN);

@@ -1,6 +1,7 @@
 #include "ui_internal.h"
 #include <Arduino.h>
 #include "display.h"
+#include "backup.h"
 #include "clock.h"
 #include "power.h"
 #include "settings.h"
@@ -129,6 +130,12 @@ static void add_checkbox(lv_obj_t *list, const char *text, uint8_t *field) {
 }
 
 static lv_obj_t *dd_csv;
+static lv_obj_t *dd_log_page;
+
+static void log_page_cb(lv_event_t *e) {
+    g_settings.log_page = (uint8_t)lv_dropdown_get_selected(lv_event_get_target(e));
+    settings_mark_dirty();
+}
 
 static void csv_format_cb(lv_event_t *e) {
     g_settings.csv_format = (uint8_t)lv_dropdown_get_selected(lv_event_get_target(e));
@@ -164,6 +171,42 @@ static void ble_label_update() {
 
 static void open_ble_cb(lv_event_t *) {
     ui_show(PAGE_BLE);
+}
+
+// --- Kopia ustawień (JSON na karcie SD) ---
+static lv_obj_t *btn_restore;
+
+static void backup_save_cb(lv_event_t *) {
+    char name[32], msg[64];
+    if (backup_save_sd(name, sizeof(name))) snprintf(msg, sizeof(msg), "Zapisano: %s (Pliki)", name);
+    else snprintf(msg, sizeof(msg), "Nie zapisano - brak karty SD?");
+    ui_toast(msg);
+}
+
+static void restart_later(lv_timer_t *) {
+    ESP.restart();
+}
+
+// Drugie dotknięcie potwierdza; po przywróceniu restart (strony budują się od nowa)
+static void backup_restore_cb(lv_event_t *) {
+    if (!lv_obj_get_user_data(btn_restore)) {
+        lv_obj_set_user_data(btn_restore, (void *)1);
+        lv_obj_set_style_bg_color(btn_restore, lv_color_hex(0xB71C1C), 0);
+        lv_label_set_text(lv_obj_get_child(btn_restore, 0), "Na pewno?");
+        return;
+    }
+    lv_obj_set_user_data(btn_restore, NULL);
+    lv_obj_set_style_bg_color(btn_restore, COLOR_BTN, 0);
+    lv_label_set_text(lv_obj_get_child(btn_restore, 0), "Przywroc");
+    char name[32], err[64], msg[100];
+    if (!backup_restore_sd(name, sizeof(name), err, sizeof(err))) {
+        ui_toast(err);
+        return;
+    }
+    snprintf(msg, sizeof(msg), "Przywrocono %s%s%s - restart", name, err[0] ? ". " : "", err);
+    ui_toast(msg);
+    lv_timer_t *t = lv_timer_create(restart_later, 2500, NULL);
+    lv_timer_set_repeat_count(t, 1);
 }
 
 // --- Data i godzina (ręcznie; zwykle ustawia ją przeglądarka) ---
@@ -290,6 +333,21 @@ void settings_page_build(lv_obj_t *page) {
     lv_label_set_long_mode(src_hint, LV_LABEL_LONG_WRAP);
     lv_obj_set_width(src_hint, lv_pct(100));
 
+    // Kopia ustawień
+    add_section(list, "KOPIA USTAWIEN (KARTA SD)");
+    lv_obj_t *br = add_row(list, "Plik SET_*.json");
+    lv_obj_t *bb = make_button(br, "Zapisz", backup_save_cb, NULL);
+    lv_obj_set_size(bb, 110, 40);
+    lv_obj_align(bb, LV_ALIGN_RIGHT_MID, -120, 0);
+    btn_restore = make_button(br, "Przywroc", backup_restore_cb, NULL);
+    lv_obj_set_size(btn_restore, 110, 40);
+    lv_obj_align(btn_restore, LV_ALIGN_RIGHT_MID, 0, 0);
+    lv_obj_t *bh = make_label(list, &lv_font_montserrat_16, COLOR_FAINT,
+                              "Zapis: strony Odczytow, wykres, usypianie, Wi-Fi (z haslami) i reszta ustawien. "
+                              "Przywraca najnowsza kopie z karty. Plik pobierzesz i wgrasz tez przez WWW.");
+    lv_label_set_long_mode(bh, LV_LABEL_LONG_WRAP);
+    lv_obj_set_width(bh, lv_pct(100));
+
     // Data i godzina
     add_section(list, "DATA I GODZINA");
     clock_label = make_label(list, &lv_font_montserrat_20, COLOR_TEXT, "");
@@ -300,10 +358,21 @@ void settings_page_build(lv_obj_t *page) {
     b = make_button(r, "Data", set_date_cb, NULL);
     lv_obj_set_size(b, 120, 40);
     lv_obj_align(b, LV_ALIGN_RIGHT_MID, 0, 0);
-    lv_obj_t *clock_hint = make_label(list, &lv_font_montserrat_16, COLOR_FAINT,
-                                      clock_has_rtc() ? "Modul zegara DS3231 z bateria - czas przetrwa wylaczenie."
-                                                      : "Brak zegara z bateria: czas ginie po odlaczeniu zasilania. "
-                                                        "Ustawia sie sam przy otwarciu strony WWW (Wi-Fi).");
+    add_checkbox(list, "Pobieraj czas z przegladarki (WWW)", &g_settings.time_from_browser);
+    add_checkbox(list, "Modul zegara RTC (DS3231) zainstalowany", &g_settings.rtc_installed);
+    // Stan modułu z chwili startu - zmiana ptaszka RTC działa po ponownym uruchomieniu
+    const char *rtc_text;
+    lv_color_t rtc_color = COLOR_FAINT;
+    if (!g_settings.rtc_installed) {
+        rtc_text = "Bez zegara z bateria czas ginie po odlaczeniu zasilania. Ustawia sie sam przy otwarciu "
+                   "strony WWW (jesli zaznaczone) albo recznie.";
+    } else if (clock_has_rtc()) {
+        rtc_text = "Modul DS3231 wykryty - czas przetrwa wylaczenie zasilania.";
+    } else {
+        rtc_text = "Modulu DS3231 NIE WYKRYTO (I2C 0x68) - sprawdz podlaczenie. Zmiana dziala po restarcie.";
+        rtc_color = COLOR_REC_ON;
+    }
+    lv_obj_t *clock_hint = make_label(list, &lv_font_montserrat_16, rtc_color, rtc_text);
     lv_label_set_long_mode(clock_hint, LV_LABEL_LONG_WRAP);
     lv_obj_set_width(clock_hint, lv_pct(100));
 
@@ -323,7 +392,7 @@ void settings_page_build(lv_obj_t *page) {
 
     // Odczyty
     add_section(list, "ODCZYTY");
-    lv_obj_t *row = add_row(list, "Wartosci i kolejnosc");
+    lv_obj_t *row = add_row(list, "Strony 1-3 (po 12)");
     lv_obj_t *btn = make_button(row, "Zmien " LV_SYMBOL_RIGHT, open_live_editor_cb, NULL);
     lv_obj_set_size(btn, 140, 40);
     lv_obj_align(btn, LV_ALIGN_RIGHT_MID, 0, 0);
@@ -349,9 +418,11 @@ void settings_page_build(lv_obj_t *page) {
     for (StepperDef &d : log_steppers) add_stepper(list, &d);
     dd_csv = add_dropdown(list, "Format pliku", "Excel PL ( ; )\nStandard ( , )", g_settings.csv_format,
                           csv_format_cb, NULL);
+    dd_log_page = add_dropdown(list, "Co zapisywac", "Strona 1\nStrona 2\nStrona 3\nWszystkie strony",
+                               g_settings.log_page, log_page_cb, NULL);
     hint = make_label(list, &lv_font_montserrat_16, COLOR_FAINT,
-                      "Zapisywane sa wartosci ze strony Odczyty i z wykresu. Excel PL: separator "
-                      "srednik i przecinek dziesietny.");
+                      "Zapisywane sa wartosci z wybranej strony Odczytow (albo wszystkich, bez powtorzen) "
+                      "i serie wykresu. Excel PL: separator srednik i przecinek dziesietny.");
     lv_label_set_long_mode(hint, LV_LABEL_LONG_WRAP);
     lv_obj_set_width(hint, lv_pct(100));
 
@@ -410,6 +481,7 @@ void settings_page_refresh() {
 void settings_page_sync() {
     for (int i = 0; i < CHART_SERIES_MAX; i++) series_label_update(i);
     lv_dropdown_set_selected(dd_csv, g_settings.csv_format);
+    lv_dropdown_set_selected(dd_log_page, g_settings.log_page);
     ble_label_update();
     sleep_labels_update();
 }

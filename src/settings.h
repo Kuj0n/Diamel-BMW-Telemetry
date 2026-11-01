@@ -9,8 +9,13 @@ enum CsvFormat : uint8_t { CSV_EXCEL_PL, CSV_STANDARD, CSV_COUNT };
 // Skąd pochodzą wartości: symulacja przy biurku albo auto
 // (transceiver CAN w gnieździe OBD albo adapter ELM327 przez Bluetooth Low Energy)
 enum DataSource : uint8_t { SRC_DEMO, SRC_CAN_DIRECT, SRC_BLE, SRC_COUNT };
+// Wi-Fi: własna sieć wyświetlacza albo połączenie z istniejącą siecią (np. domową)
+enum WifiMode : uint8_t { WIFI_MODE_OWN, WIFI_MODE_HOME, WIFI_MODE_COUNT };
 
-#define LIVE_MAX 30          // maks. liczba wartości na stronie Odczyty
+#define LIVE_MAX 30          // stara pojedyncza lista Odczytów (pola zostają dla zgodności zapisu)
+#define LIVE_PAGES 3         // strony Odczytów (przesuwane palcem)
+#define PAGE_MAX 12          // wartości na stronę: 2 kolumny x 6 wierszy, bez przewijania
+#define LOG_ALL_PAGES LIVE_PAGES // log_page: 0-2 = jedna strona, 3 = wszystkie strony
 #define CHART_SERIES_MAX 3
 #define WIFI_PASS_LEN 10
 
@@ -52,6 +57,17 @@ struct Settings {
     uint8_t sleep_above;        // 0 = mniejszy niż próg, 1 = większy niż próg
     uint8_t sleep_on_missing;   // brak wartości (np. zapłon wyłączony) = warunek spełniony
     uint8_t comm_autostart;     // rozpocznij komunikację z autem zaraz po uruchomieniu
+    uint8_t time_from_browser;  // ustawiaj zegar czasem przeglądarki przy otwarciu strony WWW
+    uint8_t rtc_installed;      // zamontowany moduł zegara DS3231 z baterią
+    uint8_t wifi_mode;          // WifiMode
+    char home_ssid[33];         // sieć domowa (tryb WIFI_MODE_HOME)
+    char home_pass[65];
+    // Strony Odczytów - każda z własną listą (te same wartości mogą być na kilku stronach)
+    uint8_t page_count[LIVE_PAGES];
+    uint16_t page_ids[LIVE_PAGES][PAGE_MAX];  // indeksy w rejestrze (do restartu)
+    uint32_t page_refs[LIVE_PAGES][PAGE_MAX]; // trwałe identyfikatory (param_ref)
+    uint8_t pages_magic;                      // REFS_MAGIC = strony wypełnione (przeniesione ze starej listy)
+    uint8_t log_page;                         // co logować: strona 0-2 albo LOG_ALL_PAGES
 };
 
 extern Settings g_settings;

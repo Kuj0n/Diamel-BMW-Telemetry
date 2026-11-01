@@ -58,6 +58,10 @@ static void set_defaults(Settings &s) {
     s.sleep_enabled = 0;
     s.sleep_above = 0;
     s.sleep_on_missing = 1;
+    s.time_from_browser = 1;
+    s.rtc_installed = 0;
+    s.wifi_mode = WIFI_MODE_OWN;
+    s.log_page = 0;
 }
 
 static bool is_valid(const Settings &s) {
@@ -83,7 +87,11 @@ static void refs_from_ids() {
         g_settings.chart_refs[i] = id == PARAM_NONE ? PARAM_NONE : param_ref(id);
     }
     if (g_settings.sleep_param != PARAM_NONE) g_settings.sleep_ref = param_ref(g_settings.sleep_param);
+    for (int p = 0; p < LIVE_PAGES; p++) {
+        for (int i = 0; i < g_settings.page_count[p]; i++) g_settings.page_refs[p][i] = param_ref(g_settings.page_ids[p][i]);
+    }
     g_settings.refs_magic = REFS_MAGIC;
+    g_settings.pages_magic = REFS_MAGIC;
 }
 
 void settings_resolve_params() {
@@ -110,6 +118,27 @@ void settings_resolve_params() {
     }
     s.sleep_param = param_by_ref(s.sleep_ref);
     if (s.sleep_param == PARAM_NONE) lost += ref_is_catalog(s.sleep_ref);
+
+    if (s.pages_magic != REFS_MAGIC) {
+        // Zapis sprzed stron: dawna lista Odczytów po kolei na strony 1-3 (po 12)
+        memset(s.page_count, 0, sizeof(s.page_count));
+        for (int i = 0; i < s.live_ref_count && i < LIVE_PAGES * PAGE_MAX; i++) {
+            int p = i / PAGE_MAX;
+            s.page_refs[p][s.page_count[p]++] = s.live_refs[i];
+        }
+        s.pages_magic = REFS_MAGIC;
+    }
+    for (int p = 0; p < LIVE_PAGES; p++) {
+        int n = 0;
+        for (int i = 0; i < s.page_count[p] && i < PAGE_MAX; i++) {
+            ParamIdx id = param_by_ref(s.page_refs[p][i]);
+            bool dup = false;
+            for (int k = 0; k < n; k++) dup |= s.page_ids[p][k] == id;
+            if (id == PARAM_NONE) lost += ref_is_catalog(s.page_refs[p][i]);
+            else if (!dup) s.page_ids[p][n++] = id;
+        }
+        s.page_count[p] = n;
+    }
     refs_frozen = lost > 0;
     refs_resolved = true;
     if (lost) Serial.printf("Ustawienia: %d wybranych parametrow nie ma w katalogu (zachowane do czasu jego wczytania)\n", lost);
@@ -131,6 +160,11 @@ void settings_load() {
     if (ok) {
         tmp.ble_addr[sizeof(tmp.ble_addr) - 1] = 0;
         tmp.ble_name[sizeof(tmp.ble_name) - 1] = 0;
+        tmp.home_ssid[sizeof(tmp.home_ssid) - 1] = 0;
+        tmp.home_pass[sizeof(tmp.home_pass) - 1] = 0;
+        if (tmp.wifi_mode >= WIFI_MODE_COUNT) tmp.wifi_mode = WIFI_MODE_OWN;
+        if (tmp.log_page > LOG_ALL_PAGES) tmp.log_page = 0;
+        for (uint8_t &c : tmp.page_count) c = c > PAGE_MAX ? PAGE_MAX : c;
     }
     prefs.end();
 

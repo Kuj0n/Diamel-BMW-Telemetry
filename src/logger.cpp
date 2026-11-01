@@ -12,7 +12,7 @@
 
 #define SD_SPI_HZ 20000000
 #define FLUSH_EVERY_MS 1000
-#define MAX_COLS (LIVE_MAX + CHART_SERIES_MAX)
+#define MAX_COLS (LIVE_PAGES * PAGE_MAX + CHART_SERIES_MAX)
 #define FORMAT_CLUSTER 32768     // duże klastry: szybsze formatowanie i dopisywanie do logów
 #define FORMAT_WORK_BUF 16384    // bufor roboczy f_mkfs (większy = szybciej)
 
@@ -50,7 +50,7 @@ void logger_new_name(const char *prefix, char *name, size_t len) {
     }
 }
 
-// Kolumny = wartości ze strony Odczyty + serie wykresu, bez powtórzeń
+// Kolumny = wartości z wybranej strony Odczytów (albo wszystkich) + serie wykresu, bez powtórzeń
 static int collect_columns(uint16_t *cols) {
     int n = 0;
     auto add = [&](uint16_t id) {
@@ -60,7 +60,12 @@ static int collect_columns(uint16_t *cols) {
         }
         cols[n++] = id;
     };
-    for (int i = 0; i < g_settings.live_count; i++) add(g_settings.live_ids[i]);
+    // Wybrana strona Odczytów albo wszystkie strony (bez powtórzeń)
+    bool all = g_settings.log_page >= LOG_ALL_PAGES;
+    int from = all ? 0 : g_settings.log_page, to = all ? LIVE_PAGES : from + 1;
+    for (int p = from; p < to; p++) {
+        for (int i = 0; i < g_settings.page_count[p]; i++) add(g_settings.page_ids[p][i]);
+    }
     for (int i = 0; i < CHART_SERIES_MAX; i++) add(g_settings.chart_series[i]);
     return n;
 }

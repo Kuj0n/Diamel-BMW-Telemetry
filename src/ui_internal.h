@@ -20,7 +20,9 @@
 
 enum Page : uint8_t {
     PAGE_MENU,
-    PAGE_LIVE,      // strony przesuwane palcem: LIVE, CHART, DTC
+    PAGE_LIVE,      // strony przesuwane palcem: Odczyty 1/3, 2/3, 3/3
+    PAGE_LIVE2,
+    PAGE_LIVE3,
     PAGE_CHART,
     PAGE_DTC,
     PAGE_FILES,
@@ -30,6 +32,7 @@ enum Page : uint8_t {
     PAGE_PICKER,
     PAGE_INFO,
     PAGE_BLE,
+    PAGE_WIFI_HOME,
     PAGE_COUNT
 };
 
@@ -55,9 +58,10 @@ void format_value(char *buf, size_t len, ParamIdx id);
 lv_color_t module_color(int module);
 
 // Strona Odczyty i edytor wyboru/kolejności (ui_live.cpp)
-void live_build(lv_obj_t *page);
-void live_rebuild();
-void live_refresh();
+void live_build(int page, lv_obj_t *obj); // page = 0..LIVE_PAGES-1
+void live_rebuild(int page);
+void live_rebuild_all();
+void live_refresh(int page);
 void live_editor_build(lv_obj_t *page);
 void live_editor_open(); // także odświeża listę po zmianach z serwera WWW
 
@@ -97,3 +101,8 @@ void ble_page_refresh();
 void wifi_page_build(lv_obj_t *page);
 void wifi_page_refresh();
 void wifi_overlay_tick(); // okno postępu aktualizacji OTA nad każdą stroną
+
+// Sieć domowa: wyszukiwanie, nazwa i hasło z klawiatury ekranowej (ui_wifi_home.cpp)
+void wifi_home_page_build(lv_obj_t *page);
+void wifi_home_page_open();
+void wifi_home_page_refresh();

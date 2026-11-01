@@ -2,6 +2,7 @@
 #include <Arduino.h>
 #include <Wire.h>
 #include <sys/time.h>
+#include "settings.h"
 
 #define DS3231_ADDR 0x68
 
@@ -45,6 +46,11 @@ static void rtc_write(const struct tm &tm) {
 }
 
 void clock_init() {
+    rtc = false;
+    if (!g_settings.rtc_installed) {
+        Serial.println("Zegar: brak modulu RTC (wg ustawien) - czas z przegladarki albo recznie");
+        return;
+    }
     Wire.beginTransmission(DS3231_ADDR);
     rtc = Wire.endTransmission() == 0;
     struct tm tm;
@@ -53,7 +59,7 @@ void clock_init() {
         Serial.println("Zegar: czas z modulu DS3231");
     } else {
         Serial.printf("Zegar: %s - czas zostanie ustawiony z przegladarki albo recznie\n",
-                      rtc ? "DS3231 bez ustawionego czasu" : "brak modulu z bateria");
+                      rtc ? "DS3231 bez ustawionego czasu" : "NIE WYKRYTO modulu DS3231 (0x68)");
     }
 }
 

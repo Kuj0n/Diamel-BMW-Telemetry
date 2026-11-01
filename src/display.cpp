@@ -199,3 +199,5 @@ void display_set_brightness(uint8_t level) {
 uint8_t display_get_brightness() { return brightness; }
 
 bool display_touch_ok() { return touch_ok; }
+
+const uint16_t *display_framebuffer() { return gfx->getFramebuffer(); }

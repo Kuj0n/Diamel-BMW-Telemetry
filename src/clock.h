@@ -6,7 +6,7 @@
 // Zegar (czas lokalny). Płytka nie ma zegara z baterią - czas ginie po odłączeniu zasilania.
 // Źródła: przeglądarka przy otwarciu strony WWW, ręczne ustawienie na ekranie, opcjonalny moduł
 // DS3231 (I2C 0x68 na magistrali dotyku, SDA 19 / SCL 45) - jeśli jest, czas przetrwa wyłączenie.
-void clock_init();            // po inicjalizacji dotyku (wspólna magistrala I2C)
+void clock_init();            // po inicjalizacji dotyku (wspólna magistrala I2C); DS3231 tylko gdy włączony w ustawieniach
 bool clock_valid();           // czas ustawiony (rok >= 2024)
 bool clock_has_rtc();         // wykryto DS3231
 void clock_set(time_t local); // ustawia czas (i DS3231, jeśli jest)

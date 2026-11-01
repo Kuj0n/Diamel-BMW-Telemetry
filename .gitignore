@@ -10,3 +10,6 @@ docs/private/
 
 # Przykladowe programy producenta plytki (duze, niepotrzebne w historii)
 docs/1-Demo/
+
+# Python
+__pycache__/

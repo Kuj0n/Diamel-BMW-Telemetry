@@ -33,6 +33,7 @@ static TextEntry *texts;
 static int ntexts, texts_cap;
 
 static CatalogStatus st;
+static volatile uint32_t bytes_done, bytes_total; // postęp wczytywania
 static volatile bool done;
 static SemaphoreHandle_t done_sem;
 
@@ -91,6 +92,7 @@ class LineReader {
             if (pos_ >= len_) {
                 len_ = f_.read((uint8_t *)buf_, sizeof(buf_));
                 pos_ = 0;
+                if (len_ > 0) bytes_done += len_;
                 if (len_ <= 0) {
                     line[n] = 0;
                     return n > 0;
@@ -138,6 +140,7 @@ static int add_module(uint8_t addr, const char *sgbd, const char *name, uint16_t
     m.first = 0;
     m.count = 0;
     m.dtc_count = dtc;
+    m.basic_count = 0;
     module_of_addr[addr] = nmodules;
     return nmodules++;
 }
@@ -198,12 +201,24 @@ static void load_params() {
         strlcpy(st.error, "Brak pliku parametry.csv", sizeof(st.error));
         return;
     }
+    // Tablica od razu na docelowy rozmiar (wiersz ma ok. 150 B) - bez wielokrotnego kopiowania setek KB w PSRAM,
+    // które przeciążało szynę pamięci wspólną z ekranem (obraz przeskakiwał)
+    int want = nparams + (int)(f.size() / 100) + 64;
+    if (want > params_cap) {
+        void *p = heap_caps_realloc(params, want * sizeof(ParamDef), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        if (p) {
+            params = (ParamDef *)p;
+            params_cap = want;
+        }
+    }
     LineReader r(f);
     char line[LINE_LEN], *fl[16];
     r.next(line, sizeof(line));
     while (r.next(line, sizeof(line))) {
+        if ((st.params & 127) == 0) vTaskDelay(1); // przerwa dla ekranu (wspólna szyna PSRAM)
         // adres;klucz;nazwa;did;typ;pozycja;maska;kolejnosc;mnoznik;przesuniecie;jednostka;miejsca;teksty;opis
-        if (split(line, fl, 16) < 13) continue;
+        int n = split(line, fl, 16);
+        if (n < 13) continue;
         int type = parse_type(fl[4]);
         if (type < 0) {
             st.skipped++;
@@ -227,6 +242,7 @@ static void load_params() {
         d.type = (uint8_t)type;
         d.decimals = (uint8_t)constrain(atoi(fl[11]), 0, 6);
         d.big_endian = strcmp(fl[7], "LE") != 0;
+        d.basic = n < 15 || atoi(fl[14]) == 1; // starszy katalog bez kolumny "poziom": wszystko
         if (!push(params, nparams, params_cap, d)) {
             strlcpy(st.error, "Za malo pamieci PSRAM", sizeof(st.error));
             break;
@@ -243,16 +259,28 @@ static void load_task(void *) {
     } else if (!SD.exists(CATALOG_DIR)) {
         strlcpy(st.error, "Brak katalogu /diamel na karcie", sizeof(st.error));
     } else {
+        static const char *const FILES[] = {"moduly.csv", "teksty.csv", "parametry.csv"};
+        for (const char *name : FILES) {
+            File f = open_catalog(name);
+            if (f) {
+                bytes_total += f.size();
+                f.close();
+            }
+        }
         load_modules();
         load_texts();
         load_params();
         // Parametry jednego modułu obok siebie (wyszukiwanie w module = zakres indeksów); DEMO zostaje na początku
-        std::stable_sort(params + P_COUNT, params + nparams,
-                         [](const ParamDef &a, const ParamDef &b) { return a.module < b.module; });
+        // Plik jest zwykle już ułożony po adresie - sortowanie (ciężkie dla PSRAM) tylko w razie potrzeby
+        auto by_module = [](const ParamDef &a, const ParamDef &b) { return a.module < b.module; };
+        if (!std::is_sorted(params + P_COUNT, params + nparams, by_module)) {
+            std::stable_sort(params + P_COUNT, params + nparams, by_module);
+        }
         for (int i = P_COUNT; i < nparams; i++) {
             ModuleDef &m = modules[params[i].module];
             if (!m.count) m.first = i;
             m.count++;
+            m.basic_count += params[i].basic;
         }
         for (int m = 1; m < nmodules; m++) {
             char name[24];
@@ -281,11 +309,11 @@ static void load_task(void *) {
 void catalog_begin() {
     memset(module_of_addr, 0xFF, sizeof(module_of_addr));
     // Moduł 0: wbudowane wartości DEMO - indeksy jak w ParamId
-    modules[0] = {"DEMO (symulacja)", "", 0, 0, P_COUNT, 0};
+    modules[0] = {"DEMO (symulacja)", "", 0, 0, P_COUNT, 0, P_COUNT};
     nmodules = 1;
     for (int i = 0; i < P_COUNT; i++) {
         ParamDef d = {PARAM_INFO[i].name, PARAM_INFO[i].unit, "", 1, 0, 0, 0, 0, -1, 0, MODULE_DEMO, PTYPE_F32,
-                      PARAM_INFO[i].decimals, 1};
+                      PARAM_INFO[i].decimals, 1, 1};
         push(params, nparams, params_cap, d);
     }
     done_sem = xSemaphoreCreateBinary();
@@ -299,6 +327,11 @@ bool catalog_wait(uint32_t timeout_ms) {
 }
 
 void catalog_status(CatalogStatus &out) { out = st; }
+
+int catalog_progress() {
+    if (done) return 100;
+    return bytes_total ? (int)(bytes_done * 100ULL / bytes_total) : 0;
+}
 
 int params_count() { return done ? nparams : P_COUNT; }
 const ParamDef &param(ParamIdx i) { return params[i]; }
@@ -328,6 +361,27 @@ uint32_t param_ref(ParamIdx i) {
     return p.addr ? ((uint32_t)p.addr << 24) | key_hash(p.key) : i;
 }
 
+void param_name_key(ParamIdx i, char *buf, size_t len) {
+    if (i >= params_count()) buf[0] = 0;
+    else if (!params[i].addr) snprintf(buf, len, "demo:%u", i);
+    else snprintf(buf, len, "%02X:%s", params[i].addr, params[i].key);
+}
+
+ParamIdx param_by_name_key(const char *text) {
+    if (!strncmp(text, "demo:", 5)) {
+        int i = atoi(text + 5);
+        return i >= 0 && i < P_COUNT ? (ParamIdx)i : PARAM_NONE;
+    }
+    const char *colon = strchr(text, ':');
+    if (!colon || colon - text != 2) return PARAM_NONE;
+    int m = module_of_addr[strtoul(text, nullptr, 16) & 0xFF];
+    if (m < 0 || !done) return PARAM_NONE;
+    for (int i = modules[m].first; i < modules[m].first + modules[m].count; i++) {
+        if (!strcmp(params[i].key, colon + 1)) return i;
+    }
+    return PARAM_NONE;
+}
+
 ParamIdx param_by_ref(uint32_t ref) {
     if (!ref_is_catalog(ref)) return ref < P_COUNT ? (ParamIdx)ref : PARAM_NONE;
     int m = module_of_addr[ref >> 24];
@@ -351,7 +405,7 @@ static bool contains_ci(const char *text, const char *needle) {
     return false;
 }
 
-int params_search(int module, const char *query, int offset, ParamIdx *out, int max) {
+int params_search(int module, const char *query, int offset, ParamIdx *out, int max, bool all) {
     int from = 0, to = params_count();
     if (module >= 0 && module < modules_count()) {
         from = modules[module].first;
@@ -359,6 +413,7 @@ int params_search(int module, const char *query, int offset, ParamIdx *out, int 
     }
     int total = 0, n = 0;
     for (int i = from; i < to; i++) {
+        if (!all && !params[i].basic) continue;
         if (!contains_ci(params[i].name, query) && !contains_ci(params[i].key, query)) continue;
         if (total >= offset && n < max) out[n++] = i;
         total++;

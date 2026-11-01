@@ -6,9 +6,15 @@
 // aktualizacja oprogramowania (OTA). Włączane ręcznie ze strony Wi-Fi na ekranie.
 // Serwer działa w zadaniu AsyncTCP na rdzeniu 0 - nie dotyka LVGL; zmiany dla interfejsu
 // przekazuje przez wifi_apply_web_settings() / wifi_take_message() wołane z zadania UI.
-bool wifi_start(); // blokuje ok. 0.5 s; false = nie udało się uruchomić punktu dostępowego
+// Stan: wyłączone / łączenie z siecią domową / własna sieć / połączone z siecią domową
+enum WifiState : uint8_t { WSTATE_OFF, WSTATE_CONNECTING, WSTATE_OWN, WSTATE_HOME };
+#define MDNS_NAME "diamel" // w sieci domowej: http://diamel.local
+
+bool wifi_start(); // własna sieć: ok. 0.5 s; sieć domowa: łączenie w tle (20 s, potem własna sieć)
 void wifi_stop();
 bool wifi_active();
+WifiState wifi_state();
+void wifi_restart(); // po zmianie trybu / sieci
 uint8_t wifi_clients();
 const char *wifi_ssid(); // "Diamel-XXXX" z końcówki adresu MAC, znane także przed włączeniem
 const char *wifi_ip();

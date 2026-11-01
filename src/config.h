@@ -1,6 +1,6 @@
 #pragma once
 
-#define FW_VERSION "0.8"
+#define FW_VERSION "0.12"
 #define FW_AUTHOR  "Diamel"
 #define FW_VEHICLE "BMW F31 B47 xDrive (DDE D70BX7A0)"
 

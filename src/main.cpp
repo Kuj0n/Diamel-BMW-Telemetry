@@ -23,7 +23,6 @@ void setup() {
     clock_init(); // po dotyku - opcjonalny DS3231 na tej samej magistrali I2C
     telemetry_init();
     logger_init(); // po ekranie - karta SD dzieli piny 47/48 z SPI inicjalizacji ST7701
-    catalog_begin(); // wczytywanie katalogu z karty w tle, w czasie ekranu powitalnego
     ui_init();
     telemetry_start();
 }

@@ -17,7 +17,7 @@
 #define PENDING_EXTRA_MS 5000 // sterownik odpowiedział "czekaj" (NRC 0x78)
 #define VALUE_MAX_AGE_MS 5000 // starsza wartość = brak danych
 #define BUS_RETRY_MS 2000     // po braku połączenia - kolejna próba
-#define ACTIVE_MAX (LIVE_MAX + CHART_SERIES_MAX + 1)
+#define ACTIVE_MAX (LIVE_PAGES * PAGE_MAX + CHART_SERIES_MAX + 1)
 #define RESP_MAX 512
 
 static SemaphoreHandle_t bus_lock; // jedno zapytanie naraz (odpytywanie, odczyt błędów)
@@ -222,7 +222,7 @@ static bool decode(const ParamDef &p, const uint8_t *data, size_t len, float &ou
     return isfinite(out);
 }
 
-// Parametry do odpytywania: Odczyty + wykres + parametr usypiania, tylko z katalogu auta
+// Parametry do odpytywania: wszystkie strony Odczytów + wykres + parametr usypiania, tylko z katalogu auta
 static int collect_active(ParamIdx *out) {
     int n = 0;
     auto add = [&](ParamIdx id) {
@@ -232,7 +232,9 @@ static int collect_active(ParamIdx *out) {
         }
         out[n++] = id;
     };
-    for (int i = 0; i < g_settings.live_count; i++) add(g_settings.live_ids[i]);
+    for (int p = 0; p < LIVE_PAGES; p++) {
+        for (int i = 0; i < g_settings.page_count[p]; i++) add(g_settings.page_ids[p][i]);
+    }
     for (int i = 0; i < CHART_SERIES_MAX; i++) add(g_settings.chart_series[i]);
     if (g_settings.sleep_enabled) add(g_settings.sleep_param);
     return n;

@@ -22,6 +22,8 @@ static void *pick_ctx;
 static Page return_page;
 static int cur_module = -1; // -1 = lista modułów
 static int next_offset;
+static bool show_all = false;   // false = tylko lista podstawowa (zapamiętane do restartu)
+static lv_obj_t *btn_all;
 static bool ignore_text_change; // czyszczenie pola z kodu - przebudowa robiona osobno
 
 static void rebuild();
@@ -92,7 +94,7 @@ static void append_page() {
     }
     const char *q = lv_textarea_get_text(search_ta);
     ParamIdx found[PAGE_SIZE];
-    int total = params_search(cur_module, q, next_offset, found, PAGE_SIZE);
+    int total = params_search(cur_module, q, next_offset, found, PAGE_SIZE, show_all);
     int got = min(PAGE_SIZE, max(0, total - next_offset));
     for (int i = 0; i < got; i++) {
         ParamIdx id = found[i];
@@ -142,9 +144,10 @@ static void rebuild() {
         }
         for (int m = 0; m < modules_count(); m++) {
             const ModuleDef &md = module_def(m);
-            if (!md.count) continue;
+            uint16_t count = show_all ? md.count : md.basic_count;
+            if (!count) continue;
             char right[16];
-            snprintf(right, sizeof(right), "%u " LV_SYMBOL_RIGHT, md.count);
+            snprintf(right, sizeof(right), "%u " LV_SYMBOL_RIGHT, count);
             lv_obj_t *row = make_row(md.name, right, module_color(m));
             lv_obj_add_event_cb(row, module_row_cb, LV_EVENT_CLICKED, (void *)(intptr_t)m);
         }
@@ -170,6 +173,18 @@ static void back_cb(lv_event_t *) {
     lv_async_call(rebuild_async, NULL);
 }
 
+// Lista podstawowa (kilkadziesiąt najważniejszych, po polsku) albo wszystkie parametry katalogu
+static void all_label_update() {
+    lv_label_set_text(lv_obj_get_child(btn_all, 0), show_all ? "Wszyst." : "Podst.");
+    lv_obj_set_style_bg_color(btn_all, show_all ? COLOR_ACCENT : COLOR_BTN, 0);
+}
+
+static void all_cb(lv_event_t *) {
+    show_all = !show_all;
+    all_label_update();
+    lv_async_call(rebuild_async, NULL);
+}
+
 static void cancel_cb(lv_event_t *) {
     finish(PARAM_NONE, false);
 }
@@ -182,12 +197,18 @@ void picker_build(lv_obj_t *page) {
     search_ta = lv_textarea_create(page);
     lv_textarea_set_one_line(search_ta, true);
     lv_obj_set_style_text_font(search_ta, &lv_font_montserrat_20, 0);
-    lv_obj_set_size(search_ta, 277, 46);
+    lv_obj_set_size(search_ta, 190, 46);
     lv_obj_set_pos(search_ta, 66, 5);
     lv_obj_add_event_cb(search_ta, ta_cb, LV_EVENT_ALL, NULL);
 
+    btn_all = make_button(page, "", all_cb, NULL);
+    lv_obj_set_size(btn_all, 86, 46);
+    lv_obj_set_pos(btn_all, 262, 5);
+    lv_obj_set_style_text_font(lv_obj_get_child(btn_all, 0), &lv_font_montserrat_16, 0);
+    all_label_update();
+
     lv_obj_t *cancel = make_button(page, "Anuluj", cancel_cb, NULL);
-    lv_obj_set_size(cancel, 120, 46);
+    lv_obj_set_size(cancel, 116, 46);
     lv_obj_align(cancel, LV_ALIGN_TOP_RIGHT, -8, 5);
 
     list = lv_obj_create(page);

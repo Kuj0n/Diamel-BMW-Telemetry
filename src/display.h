@@ -12,3 +12,5 @@ uint16_t display_fps();
 // Uśpienie ekranu: dotyk nie klika, tylko zgłasza chęć wybudzenia (display_take_wake)
 void display_sleep(bool on);
 bool display_take_wake();
+// Obraz ekranu (RGB565, 480x480, w PSRAM) - do zrzutów ekranu przez WWW
+const uint16_t *display_framebuffer();
