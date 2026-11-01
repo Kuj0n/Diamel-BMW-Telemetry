@@ -3,7 +3,7 @@
 #include <SD.h>
 #include "logger.h"
 
-// --- Strona Pliki: logi CSV na karcie SD, usuwanie z potwierdzeniem ---
+// --- Strona Pliki: logi CSV na karcie SD, usuwanie z potwierdzeniem, formatowanie karty ---
 #define MAX_FILES 200
 #define CONFIRM_COLOR lv_color_hex(0xB71C1C)
 
@@ -15,6 +15,7 @@ struct FileEntry {
 static lv_obj_t *lbl_card;
 static lv_obj_t *list;
 static lv_obj_t *btn_delete_all;
+static lv_obj_t *format_box; // okno "Formatowanie..." na czas pracy zadania w tle
 static FileEntry files[MAX_FILES];
 static int file_count;
 
@@ -23,6 +24,44 @@ static void reload();
 // Przeładowanie listy kasuje przyciski - z ich własnych zdarzeń wołamy je dopiero po obsłudze zdarzenia
 static void reload_async(void *) {
     reload();
+}
+
+// --- Formatowanie: okno z pytaniem, potem okno postępu do zakończenia zadania w tle ---
+static lv_obj_t *make_msgbox(const char *title, const char *text, const char **buttons) {
+    lv_obj_t *box = lv_msgbox_create(NULL, title, text, buttons, false);
+    lv_obj_set_width(box, 400);
+    lv_obj_set_style_text_font(box, &lv_font_montserrat_20, 0);
+    lv_obj_center(box);
+    return box;
+}
+
+// Wołane co 100 ms z ui.cpp - okno pokazuje się także przy formatowaniu uruchomionym ze strony WWW
+void files_format_tick() {
+    bool running = logger_formatting();
+    if (running && !format_box) {
+        format_box = make_msgbox("Formatowanie karty", "Trwa formatowanie (do ok. 30 s).\nNie wyjmuj karty.", NULL);
+    } else if (!running && format_box) {
+        lv_msgbox_close(format_box);
+        format_box = NULL;
+        if (logger_format_ok()) ui_toast(logger_format_error()[0] ? logger_format_error() : "Karta sformatowana, katalog zachowany");
+        else ui_toast(logger_format_error()[0] ? logger_format_error() : "Blad formatowania karty");
+        reload();
+    }
+}
+
+static void format_confirm_cb(lv_event_t *e) {
+    lv_obj_t *box = lv_event_get_current_target(e);
+    bool yes = lv_msgbox_get_active_btn(box) == 0;
+    lv_msgbox_close_async(box);
+    if (yes && !logger_format_start()) ui_toast("Najpierw zatrzymaj nagrywanie");
+}
+
+static void format_cb(lv_event_t *) {
+    static const char *buttons[] = {"Formatuj", "Anuluj", ""};
+    lv_obj_t *box = make_msgbox("Formatowanie karty",
+                                "Wszystkie dane na karcie zostana usuniete, z wyjatkiem katalogu parametrow /diamel. Kontynuowac?",
+                                buttons);
+    lv_obj_add_event_cb(box, format_confirm_cb, LV_EVENT_VALUE_CHANGED, NULL);
 }
 
 // Usuwanie wymaga drugiego dotknięcia: pierwsze zmienia przycisk na czerwony "Na pewno?"
@@ -34,18 +73,11 @@ static bool confirm_step(lv_obj_t *btn, const char *confirm_text) {
     return false;
 }
 
-static bool delete_file(const char *name) {
-    if (strcmp(name, logger_current_file()) == 0) return false; // plik w trakcie zapisu
-    char path[40];
-    snprintf(path, sizeof(path), "%s/%.23s", LOG_DIR, name);
-    return SD.remove(path);
-}
-
 static void delete_cb(lv_event_t *e) {
     lv_obj_t *btn = lv_event_get_target(e);
     if (!confirm_step(btn, "?")) return;
     int i = (int)(intptr_t)lv_event_get_user_data(e);
-    if (!delete_file(files[i].name)) ui_toast("Nie mozna usunac pliku");
+    if (!logger_delete(files[i].name)) ui_toast("Nie mozna usunac pliku");
     lv_async_call(reload_async, NULL);
 }
 
@@ -53,7 +85,7 @@ static void delete_all_cb(lv_event_t *e) {
     if (!confirm_step(lv_event_get_target(e), "Na pewno usunac wszystkie?")) return;
     int failed = 0;
     for (int i = 0; i < file_count; i++) {
-        if (!delete_file(files[i].name)) failed++;
+        if (!logger_delete(files[i].name)) failed++;
     }
     if (failed) ui_toast("Pominieto plik w trakcie zapisu");
     lv_async_call(reload_async, NULL);
@@ -75,17 +107,21 @@ static void reload() {
     lv_label_set_text(lv_obj_get_child(btn_delete_all, 0), LV_SYMBOL_TRASH " Usun wszystkie");
 
     if (!logger_sd_ok()) {
-        lv_label_set_text(lbl_card, "Brak karty SD (wloz karte i uruchom ponownie)");
+        lv_label_set_text(lbl_card, "Brak karty SD lub karta nieczytelna");
         lv_obj_add_flag(btn_delete_all, LV_OBJ_FLAG_HIDDEN);
+        make_label(list, &lv_font_montserrat_16, COLOR_DIM,
+                   "Wloz karte i uruchom ponownie albo sformatuj ja (przycisk u gory).");
         return;
     }
 
+    uint64_t logs_bytes = 0;
     File dir = SD.open(LOG_DIR);
     if (dir) {
         for (File f = dir.openNextFile(); f && file_count < MAX_FILES; f = dir.openNextFile()) {
             if (!f.isDirectory()) {
                 strlcpy(files[file_count].name, f.name(), sizeof(files[file_count].name));
                 files[file_count].size = f.size();
+                logs_bytes += f.size();
                 file_count++;
             }
             f.close();
@@ -94,10 +130,15 @@ static void reload() {
     }
     qsort(files, file_count, sizeof(FileEntry), compare_desc);
 
-    uint64_t total = SD.totalBytes() / (1024 * 1024);
-    uint64_t used = SD.usedBytes() / (1024 * 1024);
-    lv_label_set_text_fmt(lbl_card, "Karta: wolne %u MB z %u MB, plikow: %d",
-                          (unsigned)(total - used), (unsigned)total, file_count);
+    // Zajęte miejsce poza logami (np. pliki z aparatu/telefonu) - wyjaśnia małą ilość wolnego miejsca
+    const uint64_t MB = 1024 * 1024;
+    uint64_t total = SD.totalBytes();
+    uint64_t used = SD.usedBytes();
+    uint64_t other = used > logs_bytes ? used - logs_bytes : 0;
+    char other_text[32] = "";
+    if (other >= MB) snprintf(other_text, sizeof(other_text), ", inne dane: %u MB", (unsigned)(other / MB));
+    lv_label_set_text_fmt(lbl_card, "Wolne %u z %u MB\nLogi: %d%s", (unsigned)((total - used) / MB),
+                          (unsigned)(total / MB), file_count, other_text);
 
     if (file_count == 0) {
         make_label(list, &lv_font_montserrat_20, COLOR_DIM, "Brak logow. Nagrywanie: przycisk REC.");
@@ -133,13 +174,17 @@ static void reload() {
 
 void files_page_build(lv_obj_t *page) {
     lbl_card = make_label(page, &lv_font_montserrat_16, COLOR_DIM, "");
-    lv_obj_set_width(lbl_card, 330);
+    lv_obj_set_width(lbl_card, 260);
     lv_label_set_long_mode(lbl_card, LV_LABEL_LONG_WRAP);
-    lv_obj_set_pos(lbl_card, 12, 12);
+    lv_obj_set_pos(lbl_card, 12, 9);
 
     lv_obj_t *refresh = make_button(page, LV_SYMBOL_REFRESH, refresh_cb, NULL);
     lv_obj_set_size(refresh, 60, 44);
     lv_obj_align(refresh, LV_ALIGN_TOP_RIGHT, -10, 5);
+
+    lv_obj_t *format = make_button(page, "Formatuj", format_cb, NULL);
+    lv_obj_set_size(format, 120, 44);
+    lv_obj_align(format, LV_ALIGN_TOP_RIGHT, -78, 5);
 
     list = lv_obj_create(page);
     lv_obj_set_size(list, SCREEN_W, PAGE_H - 55 - 60);

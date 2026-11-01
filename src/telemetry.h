@@ -73,6 +73,10 @@ void telemetry_init();
 // Bezpieczne między zadaniami (rdzeń CAN/DEMO zapisuje, rdzeń UI czyta)
 void telemetry_get(TelemetrySnapshot &out);
 void telemetry_set(const TelemetrySnapshot &in);
+// Wartość parametru z rejestru (catalog.h); false = brak wartości. Bezpieczne między zadaniami.
+bool telemetry_value(uint16_t idx, float &out);
 
-// Zadanie generujące dane symulowane (DEMO_MODE)
-void telemetry_start_demo();
+// Zadanie danych: w trybie DEMO generuje symulację, w trybie auta (CAN)
+// na razie oznacza wszystko jako brak wartości - odczyt z auta dojdzie w kolejnym etapie.
+// Źródło (g_settings.data_source) można zmieniać w trakcie pracy.
+void telemetry_start();

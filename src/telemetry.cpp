@@ -1,6 +1,9 @@
 #include "telemetry.h"
 #include <Arduino.h>
 #include <math.h>
+#include "catalog.h"
+#include "comm.h"
+#include "settings.h"
 
 const char *const GROUP_NAMES[GROUP_COUNT] = {"Silnik", "xDrive", "Klima"};
 
@@ -68,6 +71,28 @@ void telemetry_set(const TelemetrySnapshot &in) {
     portEXIT_CRITICAL(&mux);
 }
 
+bool telemetry_value(uint16_t idx, float &out) {
+    if (idx < P_COUNT) {
+        portENTER_CRITICAL(&mux);
+        bool valid = current.valid[idx];
+        out = current.value[idx];
+        portEXIT_CRITICAL(&mux);
+        return valid;
+    }
+    if (idx >= params_count()) return false;
+    if (g_settings.data_source != SRC_DEMO) return comm_value(idx, out); // wartość odczytana z auta
+
+    // DEMO dla parametrów z katalogu: ruchome wartości, żeby było widać działanie stron i logu
+    const ParamDef &p = param(idx);
+    uint32_t ms = millis();
+    if (p.texts >= 0 || p.mask) {
+        out = (float)((ms / 3000 + idx) % (p.texts >= 0 ? 4 : 2)); // stany / bity: kilka wartości po kolei
+    } else {
+        out = 50.0f + 25.0f * sinf(ms / 1000.0f * 0.3f + idx * 0.7f);
+    }
+    return true;
+}
+
 // Symulacja jazdy: obciążenie zmienia się płynnie, rzeczywiste doładowanie
 // dogania zadane z opóźnieniem (turbo lag), temperatury rosną do roboczych.
 static void demo_task(void *) {
@@ -78,6 +103,14 @@ static void demo_task(void *) {
     memset(&s, 0, sizeof(s));
 
     for (;;) {
+        if (g_settings.data_source != SRC_DEMO) {
+            // Odczyt z auta jeszcze nie istnieje - żadnych wartości zamiast symulacji
+            memset(s.valid, 0, sizeof(s.valid));
+            s.updated_ms = millis();
+            telemetry_set(s);
+            vTaskDelay(pdMS_TO_TICKS(200));
+            continue;
+        }
         t += 0.05f;
         float load = 0.5f + 0.5f * sinf(t * 0.4f) * sinf(t * 0.13f + 1.0f); // 0..1
 
@@ -140,7 +173,7 @@ static void demo_task(void *) {
     }
 }
 
-void telemetry_start_demo() {
+void telemetry_start() {
     // Rdzeń 0 - tam docelowo pracuje komunikacja CAN.
     // Stos 8 KB: snapshot z 42 parametrami leży na stosie.
     xTaskCreatePinnedToCore(demo_task, "DEMO", 8192, NULL, 2, NULL, 0);

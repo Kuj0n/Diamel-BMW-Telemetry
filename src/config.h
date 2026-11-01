@@ -1,11 +1,8 @@
 #pragma once
 
-#define FW_VERSION "0.3-demo"
+#define FW_VERSION "0.8"
 #define FW_AUTHOR  "Diamel"
-#define FW_VEHICLE "BMW F30 B47 (DDE D70BX7A0)"
-
-// 1 = dane symulowane (testy przy biurku), 0 = odczyt z auta przez CAN
-#define DEMO_MODE 1
+#define FW_VEHICLE "BMW F31 B47 xDrive (DDE D70BX7A0)"
 
 // --- Ekran GUITION ESP32-4848S040 (ST7701, 480x480) ---
 #define SCREEN_W 480

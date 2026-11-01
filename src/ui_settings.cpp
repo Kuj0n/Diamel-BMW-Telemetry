@@ -1,6 +1,8 @@
 #include "ui_internal.h"
 #include <Arduino.h>
 #include "display.h"
+#include "clock.h"
+#include "power.h"
 #include "settings.h"
 
 // --- Strona Ustawienia: przewijana lista, każda zmiana zapisywana automatycznie ---
@@ -25,9 +27,8 @@ static StepperDef log_steppers[] = {
     {"Interwal zapisu", &g_settings.log_interval_ms, 50, 5000, 50, "ms", NULL, NULL},
 };
 
-static StepperDef stop_steppers[] = {
-    {"Brak odpowiedzi DDE", &g_settings.stop_no_reply_s,   2, 60, 1, "s",   NULL,   NULL},
-    {"Obroty 0 przez",      &g_settings.stop_rpm_zero_min, 0, 60, 1, "min", "wyl.", NULL},
+static StepperDef sleep_steppers[] = {
+    {"Opoznienie", &g_settings.sleep_delay_s, 10, 3600, 10, "s", NULL, NULL},
 };
 
 static void stepper_update(StepperDef *d) {
@@ -105,12 +106,41 @@ static void start_screen_cb(lv_event_t *e) {
     settings_mark_dirty();
 }
 
+static void data_source_cb(lv_event_t *e) {
+    g_settings.data_source = (uint8_t)lv_dropdown_get_selected(lv_event_get_target(e));
+    settings_mark_dirty();
+    if (g_settings.data_source != SRC_DEMO) ui_toast("Odczyt z auta - w przygotowaniu");
+}
+
+// Ptaszek zapisujący 0/1 w polu ustawień (user_data = wskaźnik na pole)
+static void checkbox_cb(lv_event_t *e) {
+    uint8_t *field = (uint8_t *)lv_event_get_user_data(e);
+    *field = lv_obj_has_state(lv_event_get_target(e), LV_STATE_CHECKED) ? 1 : 0;
+    settings_mark_dirty();
+}
+
+static void add_checkbox(lv_obj_t *list, const char *text, uint8_t *field) {
+    lv_obj_t *cb = lv_checkbox_create(list);
+    lv_checkbox_set_text(cb, text);
+    lv_obj_set_style_text_font(cb, &lv_font_montserrat_20, 0);
+    lv_obj_set_style_pad_ver(cb, 8, 0);
+    if (*field) lv_obj_add_state(cb, LV_STATE_CHECKED);
+    lv_obj_add_event_cb(cb, checkbox_cb, LV_EVENT_VALUE_CHANGED, field);
+}
+
+static lv_obj_t *dd_csv;
+
+static void csv_format_cb(lv_event_t *e) {
+    g_settings.csv_format = (uint8_t)lv_dropdown_get_selected(lv_event_get_target(e));
+    settings_mark_dirty();
+}
+
 // Serie wykresu wybierane wyszukiwarką; przycisk pokazuje aktualny wybór
 static lv_obj_t *series_btn_label[CHART_SERIES_MAX];
 
 static void series_label_update(int i) {
     uint16_t id = g_settings.chart_series[i];
-    lv_label_set_text(series_btn_label[i], id == PARAM_NONE ? "(brak)" : PARAM_INFO[id].name);
+    lv_label_set_text(series_btn_label[i], id == PARAM_NONE ? "(brak)" : param(id).name);
 }
 
 static void series_picked_cb(uint16_t id, void *ctx) {
@@ -123,6 +153,106 @@ static void series_picked_cb(uint16_t id, void *ctx) {
 
 static void series_btn_cb(lv_event_t *e) {
     picker_open(true, NULL, series_picked_cb, lv_event_get_user_data(e), PAGE_SETTINGS);
+}
+
+// Wybrany adapter BLE na przycisku; dotknięcie otwiera stronę wyszukiwania
+static lv_obj_t *ble_btn_label;
+
+static void ble_label_update() {
+    lv_label_set_text(ble_btn_label, g_settings.ble_addr[0] ? g_settings.ble_name : "Wybierz " LV_SYMBOL_RIGHT);
+}
+
+static void open_ble_cb(lv_event_t *) {
+    ui_show(PAGE_BLE);
+}
+
+// --- Data i godzina (ręcznie; zwykle ustawia ją przeglądarka) ---
+static lv_obj_t *clock_label;
+
+static void set_time_value(double v) {
+    int hhmm = (int)v;
+    int h = hhmm / 100, m = hhmm % 100;
+    if (h > 23 || m > 59) return ui_toast("Bledna godzina (GGMM, np. 1532)");
+    struct tm tm;
+    if (!clock_now(tm)) { // bez daty: zaczynamy od 2026-01-01
+        memset(&tm, 0, sizeof(tm));
+        tm.tm_year = 126;
+        tm.tm_mday = 1;
+    }
+    tm.tm_hour = h;
+    tm.tm_min = m;
+    tm.tm_sec = 0;
+    clock_set(mktime(&tm));
+}
+
+static void set_date_value(double v) {
+    long d = (long)v; // DDMMRRRR, np. 01112026
+    int day = d / 1000000, mon = (d / 10000) % 100, year = d % 10000;
+    if (day < 1 || day > 31 || mon < 1 || mon > 12 || year < 2024 || year > 2099) {
+        return ui_toast("Bledna data (DDMMRRRR, np. 01112026)");
+    }
+    struct tm tm;
+    if (!clock_now(tm)) memset(&tm, 0, sizeof(tm));
+    tm.tm_mday = day;
+    tm.tm_mon = mon - 1;
+    tm.tm_year = year - 1900;
+    clock_set(mktime(&tm));
+}
+
+static void set_time_cb(lv_event_t *) {
+    struct tm tm;
+    bool ok = clock_now(tm);
+    ui_number_input("Godzina GGMM (np. 1532)", ok ? tm.tm_hour * 100 + tm.tm_min : 0, 0, set_time_value);
+}
+
+static void set_date_cb(lv_event_t *) {
+    struct tm tm;
+    bool ok = clock_now(tm);
+    double v = ok ? tm.tm_mday * 1000000.0 + (tm.tm_mon + 1) * 10000.0 + tm.tm_year + 1900 : 0;
+    ui_number_input("Data DDMMRRRR (np. 01112026)", v, 0, set_date_value);
+}
+
+// --- Automatyczne uśpienie ---
+static lv_obj_t *sleep_param_label;
+static lv_obj_t *sleep_threshold_label;
+static lv_obj_t *sleep_status;
+
+static void sleep_labels_update() {
+    ParamIdx id = g_settings.sleep_param;
+    bool ok = id != PARAM_NONE && id < params_count();
+    lv_label_set_text(sleep_param_label, ok ? param(id).name : "(wybierz)");
+    // snprintf, nie lv_label_set_text_fmt - formatowanie LVGL nie obsługuje liczb zmiennoprzecinkowych
+    char buf[40];
+    snprintf(buf, sizeof(buf), "%.*f %s", ok ? param(id).decimals : 1, g_settings.sleep_threshold,
+             ok ? param(id).unit : "");
+    lv_label_set_text(sleep_threshold_label, buf);
+}
+
+static void sleep_picked_cb(uint16_t id, void *) {
+    g_settings.sleep_param = id;
+    sleep_labels_update();
+    settings_mark_dirty();
+}
+
+static void sleep_param_cb(lv_event_t *) {
+    picker_open(false, NULL, sleep_picked_cb, NULL, PAGE_SETTINGS);
+}
+
+static void sleep_above_cb(lv_event_t *e) {
+    g_settings.sleep_above = (uint8_t)lv_dropdown_get_selected(lv_event_get_target(e));
+    settings_mark_dirty();
+}
+
+static void sleep_threshold_set(double v) {
+    g_settings.sleep_threshold = (float)v;
+    sleep_labels_update();
+    settings_mark_dirty();
+}
+
+static void sleep_threshold_cb(lv_event_t *) {
+    ParamIdx id = g_settings.sleep_param;
+    uint8_t dec = id != PARAM_NONE && id < params_count() ? param(id).decimals : 1;
+    ui_number_input("Prog usypiania", g_settings.sleep_threshold, dec, sleep_threshold_set);
 }
 
 static void open_live_editor_cb(lv_event_t *) {
@@ -140,6 +270,43 @@ void settings_page_build(lv_obj_t *page) {
     lv_obj_set_style_pad_row(list, 4, 0);
     lv_obj_set_flex_flow(list, LV_FLEX_FLOW_COLUMN);
 
+    // Źródło danych
+    add_section(list, "ZRODLO DANYCH");
+    add_dropdown(list, "Tryb pracy", "DEMO (symulacja)\nCAN - gniazdo OBD\nAdapter BLE (ELM327)",
+                 g_settings.data_source, data_source_cb, NULL);
+    lv_obj_t *ble_row = add_row(list, "Adapter BLE");
+    lv_obj_t *ble_btn = make_button(ble_row, "", open_ble_cb, NULL);
+    lv_obj_set_size(ble_btn, 230, 40);
+    lv_obj_align(ble_btn, LV_ALIGN_RIGHT_MID, 0, 0);
+    ble_btn_label = lv_obj_get_child(ble_btn, 0);
+    lv_label_set_long_mode(ble_btn_label, LV_LABEL_LONG_DOT);
+    lv_obj_set_width(ble_btn_label, 200);
+    lv_obj_set_style_text_align(ble_btn_label, LV_TEXT_ALIGN_CENTER, 0);
+    ble_label_update();
+    add_checkbox(list, "Start komunikacji po uruchomieniu", &g_settings.comm_autostart);
+    lv_obj_t *src_hint = make_label(list, &lv_font_montserrat_16, COLOR_FAINT,
+                                    "DEMO: wartosci symulowane do testow przy biurku. CAN: komunikacje "
+                                    "wlacza kafelek Start w menu (albo automatycznie). Adapter BLE - odczyt w przygotowaniu.");
+    lv_label_set_long_mode(src_hint, LV_LABEL_LONG_WRAP);
+    lv_obj_set_width(src_hint, lv_pct(100));
+
+    // Data i godzina
+    add_section(list, "DATA I GODZINA");
+    clock_label = make_label(list, &lv_font_montserrat_20, COLOR_TEXT, "");
+    lv_obj_t *r = add_row(list, "Ustaw");
+    lv_obj_t *b = make_button(r, "Godzina", set_time_cb, NULL);
+    lv_obj_set_size(b, 120, 40);
+    lv_obj_align(b, LV_ALIGN_RIGHT_MID, -130, 0);
+    b = make_button(r, "Data", set_date_cb, NULL);
+    lv_obj_set_size(b, 120, 40);
+    lv_obj_align(b, LV_ALIGN_RIGHT_MID, 0, 0);
+    lv_obj_t *clock_hint = make_label(list, &lv_font_montserrat_16, COLOR_FAINT,
+                                      clock_has_rtc() ? "Modul zegara DS3231 z bateria - czas przetrwa wylaczenie."
+                                                      : "Brak zegara z bateria: czas ginie po odlaczeniu zasilania. "
+                                                        "Ustawia sie sam przy otwarciu strony WWW (Wi-Fi).");
+    lv_label_set_long_mode(clock_hint, LV_LABEL_LONG_WRAP);
+    lv_obj_set_width(clock_hint, lv_pct(100));
+
     // Ekran
     add_section(list, "EKRAN");
     make_label(list, &lv_font_montserrat_20, COLOR_TEXT, "Jasnosc");
@@ -151,6 +318,8 @@ void settings_page_build(lv_obj_t *page) {
     lv_obj_add_event_cb(slider, brightness_cb, LV_EVENT_VALUE_CHANGED, NULL);
     add_dropdown(list, "Ekran startowy", "Menu\nOdczyty\nWykres\nBledy",
                  g_settings.start_screen, start_screen_cb, NULL);
+    add_checkbox(list, "Pokaz FPS (klatki na sekunde)", &g_settings.show_fps);
+    add_checkbox(list, "Pokaz obciazenie CPU", &g_settings.show_cpu);
 
     // Odczyty
     add_section(list, "ODCZYTY");
@@ -178,8 +347,11 @@ void settings_page_build(lv_obj_t *page) {
     // Logowanie
     add_section(list, "LOGOWANIE NA KARTE SD");
     for (StepperDef &d : log_steppers) add_stepper(list, &d);
+    dd_csv = add_dropdown(list, "Format pliku", "Excel PL ( ; )\nStandard ( , )", g_settings.csv_format,
+                          csv_format_cb, NULL);
     hint = make_label(list, &lv_font_montserrat_16, COLOR_FAINT,
-                      "Zapisywane sa wartosci ze strony Odczyty i z wykresu.");
+                      "Zapisywane sa wartosci ze strony Odczyty i z wykresu. Excel PL: separator "
+                      "srednik i przecinek dziesietny.");
     lv_label_set_long_mode(hint, LV_LABEL_LONG_WRAP);
     lv_obj_set_width(hint, lv_pct(100));
 
@@ -187,12 +359,57 @@ void settings_page_build(lv_obj_t *page) {
     add_section(list, "CAN");
     for (StepperDef &d : can_steppers) add_stepper(list, &d);
 
-    add_section(list, "AUTOMATYCZNE ZATRZYMANIE CAN");
-    for (StepperDef &d : stop_steppers) add_stepper(list, &d);
+    // Automatyczne uśpienie: parametr, warunek, próg, opóźnienie
+    add_section(list, "AUTOMATYCZNE USYPIANIE");
+    add_checkbox(list, "Wlaczone", &g_settings.sleep_enabled);
+    r = add_row(list, "Parametr");
+    b = make_button(r, "", sleep_param_cb, NULL);
+    lv_obj_set_size(b, 260, 40);
+    lv_obj_align(b, LV_ALIGN_RIGHT_MID, 0, 0);
+    sleep_param_label = lv_obj_get_child(b, 0);
+    lv_label_set_long_mode(sleep_param_label, LV_LABEL_LONG_DOT);
+    lv_obj_set_width(sleep_param_label, 230);
+    lv_obj_set_style_text_align(sleep_param_label, LV_TEXT_ALIGN_CENTER, 0);
+    add_dropdown(list, "Warunek", "mniejszy niz\nwiekszy niz", g_settings.sleep_above, sleep_above_cb, NULL);
+    r = add_row(list, "Prog");
+    b = make_button(r, "", sleep_threshold_cb, NULL);
+    lv_obj_set_size(b, 230, 40);
+    lv_obj_align(b, LV_ALIGN_RIGHT_MID, 0, 0);
+    sleep_threshold_label = lv_obj_get_child(b, 0);
+    for (StepperDef &d : sleep_steppers) add_stepper(list, &d);
+    add_checkbox(list, "Brak danych = warunek spelniony", &g_settings.sleep_on_missing);
+    sleep_status = make_label(list, &lv_font_montserrat_16, COLOR_ACCENT, "");
     hint = make_label(list, &lv_font_montserrat_16, COLOR_FAINT,
-                      "Brak odpowiedzi DDE = zaplon wylaczony. Obroty 0 - "
-                      "dluzej niz postoj start-stop na swiatlach.");
+                      "Gdy warunek trwa przez caly czas opoznienia: koniec nagrywania i wygaszenie ekranu. "
+                      "Dotyk budzi. Brak danych = np. zaplon wylaczony (sterownik nie odpowiada).");
     lv_label_set_long_mode(hint, LV_LABEL_LONG_WRAP);
     lv_obj_set_width(hint, lv_pct(100));
     lv_obj_set_style_pad_bottom(hint, 20, 0);
+    sleep_labels_update();
+}
+
+// Odliczanie do uśpienia (strona Ustawienia jest widoczna)
+void settings_page_refresh() {
+    char buf[80];
+    clock_format(buf, sizeof(buf));
+    set_text_if_changed(clock_label, buf);
+    int left = power_seconds_left();
+    if (!g_settings.sleep_enabled) {
+        snprintf(buf, sizeof(buf), "Usypianie wylaczone");
+    } else if (left >= 0) {
+        snprintf(buf, sizeof(buf), "Warunek spelniony - uspienie za %d:%02d", left / 60, left % 60);
+    } else {
+        char v[32];
+        format_value(v, sizeof(v), g_settings.sleep_param);
+        snprintf(buf, sizeof(buf), "Warunek niespelniony (teraz: %s)", v);
+    }
+    set_text_if_changed(sleep_status, buf);
+}
+
+// Po zmianie ustawień z przeglądarki albo wyborze adaptera BLE
+void settings_page_sync() {
+    for (int i = 0; i < CHART_SERIES_MAX; i++) series_label_update(i);
+    lv_dropdown_set_selected(dd_csv, g_settings.csv_format);
+    ble_label_update();
+    sleep_labels_update();
 }

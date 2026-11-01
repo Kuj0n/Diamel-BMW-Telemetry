@@ -17,7 +17,11 @@ static Arduino_DataBus *bus = new Arduino_SWSPI(
 // Równoległa magistrala RGB565 do przesyłania obrazu.
 // Bounce buffer: DMA ekranu czyta z pamięci wewnętrznej zamiast bezpośrednio z PSRAM -
 // bez tego przy intensywnym rysowaniu obraz "pływa" i migocze (za mała przepustowość PSRAM).
-#define BOUNCE_BUFFER_LINES 20
+// 30 linii: więcej zapasu, gdy PSRAM jest zajęty (obiekty LVGL i katalog też są w PSRAM).
+// Rozmiar ramki musi być parzystą wielokrotnością bufora: 480*480 / (2*480*30) = 8.
+#define BOUNCE_BUFFER_LINES 30
+// 10 MHz zamiast 12: ok. 35 klatek panelu na sekundę i o 1/6 mniej odczytów z PSRAM
+#define PIXEL_CLOCK_HZ 10000000
 static Arduino_ESP32RGBPanel *rgbpanel = new Arduino_ESP32RGBPanel(
     18 /* DE */, 17 /* VSYNC */, 16 /* HSYNC */, 21 /* PCLK */,
     11 /* R0 */, 12 /* R1 */, 13 /* R2 */, 14 /* R3 */, 0 /* R4 */,
@@ -25,20 +29,38 @@ static Arduino_ESP32RGBPanel *rgbpanel = new Arduino_ESP32RGBPanel(
     4 /* B0 */, 5 /* B1 */, 6 /* B2 */, 7 /* B3 */, 15 /* B4 */,
     1 /* hsync_polarity */, 10 /* hsync_front_porch */, 8 /* hsync_pulse_width */, 50 /* hsync_back_porch */,
     1 /* vsync_polarity */, 10 /* vsync_front_porch */, 8 /* vsync_pulse_width */, 20 /* vsync_back_porch */,
-    0 /* pclk_active_neg */, 12000000 /* prefer_speed */, false /* useBigEndian */,
+    0 /* pclk_active_neg */, PIXEL_CLOCK_HZ /* prefer_speed */, false /* useBigEndian */,
     0 /* de_idle_high */, 0 /* pclk_idle_high */, SCREEN_W * BOUNCE_BUFFER_LINES /* bounce_buffer_size_px */);
 
 static Arduino_RGB_Display *gfx = new Arduino_RGB_Display(
     SCREEN_W, SCREEN_H, rgbpanel, 0 /* rotation */, true /* auto_flush */,
     bus, GFX_NOT_DEFINED /* RST */, st7701_type9_init_operations, sizeof(st7701_type9_init_operations));
 
-// 100 linii = 96 KB RAM wewnętrznego; zostawia zapas na Wi-Fi i serwer WWW
-#define DRAW_BUFFER_LINES 100
+// 80 linii = 77 KB RAM wewnętrznego (razem z większym buforem pośrednim tyle co wcześniej);
+// zostawia zapas na Wi-Fi, BLE i serwer WWW
+#define DRAW_BUFFER_LINES 80
 
 static lv_disp_draw_buf_t draw_buf;
 static lv_color_t *buf1;
 static bool touch_ok = false;
 static uint8_t brightness = 0;
+
+// Licznik klatek: LVGL woła monitor_cb po każdym odświeżeniu ekranu
+static volatile uint32_t frame_count = 0;
+
+static void monitor_cb(lv_disp_drv_t *, uint32_t, uint32_t) {
+    frame_count++;
+}
+
+uint16_t display_fps() {
+    static uint32_t last_ms = 0, last_count = 0;
+    uint32_t now = millis(), count = frame_count;
+    uint32_t dt = now - last_ms;
+    uint16_t fps = dt ? (uint16_t)((count - last_count) * 1000 / dt) : 0;
+    last_ms = now;
+    last_count = count;
+    return fps;
+}
 
 static void disp_flush_cb(lv_disp_drv_t *disp, const lv_area_t *area, lv_color_t *color_p) {
     uint32_t w = (area->x2 - area->x1 + 1);
@@ -47,9 +69,35 @@ static void disp_flush_cb(lv_disp_drv_t *disp, const lv_area_t *area, lv_color_t
     lv_disp_flush_ready(disp);
 }
 
+// Uśpienie: podświetlenie zgaszone, dotyk tylko budzi (nie klika w to, co jest pod palcem)
+static volatile bool sleeping = false;
+static volatile bool wake_request = false;
+static bool ignore_until_release = false;
+
+void display_sleep(bool on) {
+    sleeping = on;
+    if (on) wake_request = false;
+}
+
+bool display_take_wake() {
+    bool w = wake_request;
+    wake_request = false;
+    return w;
+}
+
 static void touch_read_cb(lv_indev_drv_t *drv, lv_indev_data_t *data) {
     uint16_t x, y;
-    if (!gt911_read(x, y)) {
+    bool pressed = gt911_read(x, y);
+    if (sleeping || ignore_until_release) {
+        if (sleeping && pressed) {
+            wake_request = true;
+            ignore_until_release = true;
+        }
+        if (!pressed) ignore_until_release = false;
+        data->state = LV_INDEV_STATE_REL;
+        return;
+    }
+    if (!pressed) {
         data->state = LV_INDEV_STATE_REL;
         return;
     }
@@ -128,6 +176,7 @@ void display_init() {
     disp_drv.hor_res = SCREEN_W;
     disp_drv.ver_res = SCREEN_H;
     disp_drv.flush_cb = disp_flush_cb;
+    disp_drv.monitor_cb = monitor_cb;
     disp_drv.draw_buf = &draw_buf;
     lv_disp_drv_register(&disp_drv);
 

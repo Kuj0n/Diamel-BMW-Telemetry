@@ -7,15 +7,10 @@
 #define CELL_H 70
 
 static lv_obj_t *live_page;
-static lv_obj_t *lbl_value[LIVE_MAX]; // indeks = pozycja na liście g_settings.live_ids
-
-static lv_color_t group_color(ParamGroup g) {
-    switch (g) {
-        case GROUP_XDRIVE: return lv_color_hex(0x64B5F6);
-        case GROUP_AC:     return lv_color_hex(0x80CBC4);
-        default:           return COLOR_DIM;
-    }
-}
+// Stan z chwili budowy strony - odświeżanie nie zależy od późniejszych zmian w g_settings
+static lv_obj_t *lbl_value[LIVE_MAX];
+static uint16_t built_ids[LIVE_MAX];
+static int built_count;
 
 void live_build(lv_obj_t *page) {
     live_page = page;
@@ -25,16 +20,20 @@ void live_build(lv_obj_t *page) {
 
 void live_rebuild() {
     lv_obj_clean(live_page);
+    built_count = g_settings.live_count;
+    memcpy(built_ids, g_settings.live_ids, sizeof(built_ids));
 
-    for (int pos = 0; pos < g_settings.live_count; pos++) {
-        uint16_t id = g_settings.live_ids[pos];
+    for (int pos = 0; pos < built_count; pos++) {
+        uint16_t id = built_ids[pos];
 
         lv_obj_t *cell = plain_cont(live_page);
         lv_obj_set_size(cell, CELL_W, CELL_H);
         lv_obj_set_pos(cell, 20 + (pos % 2) * 235, 8 + (pos / 2) * CELL_H);
         lv_obj_set_flex_flow(cell, LV_FLEX_FLOW_COLUMN);
 
-        make_label(cell, &lv_font_montserrat_16, group_color(PARAM_INFO[id].group), PARAM_INFO[id].name);
+        lv_obj_t *name = make_label(cell, &lv_font_montserrat_16, module_color(param(id).module), param(id).name);
+        lv_label_set_long_mode(name, LV_LABEL_LONG_DOT); // długie nazwy z katalogu
+        lv_obj_set_width(name, CELL_W);
 
         lv_obj_t *row = plain_cont(cell);
         lv_obj_set_size(row, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
@@ -42,38 +41,47 @@ void live_rebuild() {
         lv_obj_set_flex_align(row, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_END, LV_FLEX_ALIGN_END);
 
         lbl_value[pos] = make_label(row, &lv_font_montserrat_32, COLOR_TEXT, "--");
-        lv_obj_t *unit = make_label(row, &lv_font_montserrat_16, COLOR_DIM, PARAM_INFO[id].unit);
+        lv_obj_t *unit = make_label(row, &lv_font_montserrat_16, COLOR_DIM, param(id).unit);
         lv_obj_set_style_pad_left(unit, 6, 0);
         lv_obj_set_style_pad_bottom(unit, 5, 0);
     }
 
-    if (g_settings.live_count == 0) {
+    if (built_count == 0) {
         lv_obj_t *l = make_label(live_page, &lv_font_montserrat_20, COLOR_DIM,
                                  "Brak wybranych wartosci.\nUstawienia > Odczyty.");
         lv_obj_center(l);
     }
 }
 
-void live_refresh(const TelemetrySnapshot &s) {
+void live_refresh() {
     char buf[24];
-    for (int pos = 0; pos < g_settings.live_count; pos++) {
-        format_value(buf, sizeof(buf), (ParamId)g_settings.live_ids[pos], s);
+    for (int pos = 0; pos < built_count; pos++) {
+        format_value(buf, sizeof(buf), built_ids[pos]);
         set_text_if_changed(lbl_value[pos], buf);
     }
 }
 
 // --- Edytor: lista wybranych wartości (kolejność ↑↓, usuwanie ✕) + dodawanie z wyszukiwarki ---
 // Wiersze tworzone raz (LIVE_MAX), nadmiarowe ukryte - zmiany nie resetują przewinięcia listy.
+// Każda zmiana od razu przebudowuje stronę Odczyty (wyjście przyciskiem Home też jest poprawne).
 static lv_obj_t *row_obj[LIVE_MAX];
 static lv_obj_t *row_label[LIVE_MAX];
 static lv_obj_t *btn_add;
 static lv_obj_t *lbl_count;
 
+static void editor_refresh();
+
+static void editor_changed() {
+    editor_refresh();
+    live_rebuild();
+    settings_mark_dirty();
+}
+
 static void editor_refresh() {
     for (int i = 0; i < LIVE_MAX; i++) {
         if (i < g_settings.live_count) {
             uint16_t id = g_settings.live_ids[i];
-            lv_label_set_text_fmt(row_label[i], "%d. %s", i + 1, PARAM_INFO[id].name);
+            lv_label_set_text_fmt(row_label[i], "%d. %s", i + 1, param(id).name);
             lv_obj_clear_flag(row_obj[i], LV_OBJ_FLAG_HIDDEN);
         } else {
             lv_obj_add_flag(row_obj[i], LV_OBJ_FLAG_HIDDEN);
@@ -91,16 +99,14 @@ static void swap_cb(lv_event_t *e) {
     uint16_t t = g_settings.live_ids[i];
     g_settings.live_ids[i] = g_settings.live_ids[j];
     g_settings.live_ids[j] = t;
-    editor_refresh();
-    settings_mark_dirty();
+    editor_changed();
 }
 
 static void remove_cb(lv_event_t *e) {
     int i = (int)(intptr_t)lv_event_get_user_data(e);
     for (int k = i; k < g_settings.live_count - 1; k++) g_settings.live_ids[k] = g_settings.live_ids[k + 1];
     g_settings.live_count--;
-    editor_refresh();
-    settings_mark_dirty();
+    editor_changed();
 }
 
 static bool is_selected(uint16_t id) {
@@ -113,8 +119,7 @@ static bool is_selected(uint16_t id) {
 static void picked_cb(uint16_t id, void *) {
     if (id == PARAM_NONE || g_settings.live_count >= LIVE_MAX || is_selected(id)) return;
     g_settings.live_ids[g_settings.live_count++] = id;
-    editor_refresh();
-    settings_mark_dirty();
+    editor_changed();
 }
 
 static void add_cb(lv_event_t *) {
@@ -122,7 +127,6 @@ static void add_cb(lv_event_t *) {
 }
 
 static void done_cb(lv_event_t *) {
-    live_rebuild();
     ui_show(PAGE_SETTINGS);
 }
 
@@ -154,6 +158,8 @@ void live_editor_build(lv_obj_t *page) {
         lv_obj_set_style_radius(row, 6, 0);
 
         row_label[i] = make_label(row, &lv_font_montserrat_20, COLOR_TEXT, "");
+        lv_label_set_long_mode(row_label[i], LV_LABEL_LONG_DOT); // długie nazwy z katalogu nie wchodzą na przyciski
+        lv_obj_set_width(row_label[i], 270);
         lv_obj_align(row_label[i], LV_ALIGN_LEFT_MID, 10, 0);
 
         lv_obj_t *del = make_button(row, LV_SYMBOL_CLOSE, remove_cb, (void *)(intptr_t)i);
