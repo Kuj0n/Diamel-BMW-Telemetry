@@ -95,6 +95,8 @@ bool telemetry_value(uint16_t idx, float &out) {
 
 // Symulacja jazdy: obciążenie zmienia się płynnie, rzeczywiste doładowanie
 // dogania zadane z opóźnieniem (turbo lag), temperatury rosną do roboczych.
+static volatile bool demo_running = false;
+
 static void demo_task(void *) {
     float t = 0;
     float boost_act = 1.0f, rail_act = 300.0f, iat = 20.0f, egt = 150.0f;
@@ -104,12 +106,12 @@ static void demo_task(void *) {
 
     for (;;) {
         if (g_settings.data_source != SRC_DEMO) {
-            // Odczyt z auta jeszcze nie istnieje - żadnych wartości zamiast symulacji
+            // DEMO wyłączone: czyścimy wartości i kończymy zadanie (zwalnia stos)
             memset(s.valid, 0, sizeof(s.valid));
             s.updated_ms = millis();
             telemetry_set(s);
-            vTaskDelay(pdMS_TO_TICKS(200));
-            continue;
+            demo_running = false;
+            vTaskDelete(NULL);
         }
         t += 0.05f;
         float load = 0.5f + 0.5f * sinf(t * 0.4f) * sinf(t * 0.13f + 1.0f); // 0..1
@@ -173,8 +175,10 @@ static void demo_task(void *) {
     }
 }
 
+// Zadanie symulacji istnieje tylko w trybie DEMO (stos 8 KB RAM wewnętrznego)
 void telemetry_start() {
-    // Rdzeń 0 - tam docelowo pracuje komunikacja CAN.
-    // Stos 8 KB: snapshot z 42 parametrami leży na stosie.
-    xTaskCreatePinnedToCore(demo_task, "DEMO", 8192, NULL, 2, NULL, 0);
+    if (g_settings.data_source != SRC_DEMO || demo_running) return;
+    demo_running = true;
+    // Rdzeń 0, stos 8 KB: snapshot z 42 parametrami leży na stosie
+    if (xTaskCreatePinnedToCore(demo_task, "DEMO", 8192, NULL, 2, NULL, 0) != pdPASS) demo_running = false;
 }

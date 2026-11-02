@@ -1,4 +1,5 @@
 #include "display.h"
+#include <esp_lcd_panel_rgb.h>
 #include <Arduino.h>
 #include <lvgl.h>
 #include <Arduino_GFX_Library.h>
@@ -36,9 +37,37 @@ static Arduino_RGB_Display *gfx = new Arduino_RGB_Display(
     SCREEN_W, SCREEN_H, rgbpanel, 0 /* rotation */, true /* auto_flush */,
     bus, GFX_NOT_DEFINED /* RST */, st7701_type9_init_operations, sizeof(st7701_type9_init_operations));
 
-// 80 linii = 77 KB RAM wewnętrznego (razem z większym buforem pośrednim tyle co wcześniej);
-// zostawia zapas na Wi-Fi, BLE i serwer WWW
-#define DRAW_BUFFER_LINES 80
+// 48 linii = 46 KB RAM wewnętrznego (było 80 linii / 77 KB - za mało zostawało dla Wi-Fi)
+#define DRAW_BUFFER_LINES 48
+
+// --- Ustawienie obrazu od nowa ---
+// Przy dużym obciążeniu PSRAM transmisja do panelu RGB potrafi zgubić synchronizację i obraz zostaje
+// przesunięty. esp_lcd_rgb_panel_restart() zaczyna transmisję od początku ramki (w przerwie VSYNC,
+// CONFIG_LCD_RGB_RESTART_IN_VSYNC) - niewidocznie. Uchwyt panelu jest prywatny w Arduino_GFX,
+// więc odczytujemy go zgodnym ze standardem sposobem (jawna instancjacja szablonu).
+template <typename Tag, typename Tag::type M>
+struct PrivateAccess {
+    friend typename Tag::type get(Tag) { return M; }
+};
+struct PanelHandleTag {
+    typedef esp_lcd_panel_handle_t Arduino_ESP32RGBPanel::*type;
+    friend type get(PanelHandleTag);
+};
+template struct PrivateAccess<PanelHandleTag, &Arduino_ESP32RGBPanel::_panel_handle>;
+
+void display_resync() {
+    esp_lcd_panel_handle_t h = rgbpanel->*get(PanelHandleTag());
+    if (h) esp_lcd_rgb_panel_restart(h);
+}
+
+// Pełne przerysowanie: gdy przesunięta jest sama zawartość pamięci obrazu (nieruchomy ekran,
+// np. menu, nigdy by się nie odświeżył). Wołać z zadania LVGL.
+void display_redraw() {
+    display_resync();
+    lv_obj_invalidate(lv_scr_act());
+    lv_obj_invalidate(lv_layer_top());
+    lv_obj_invalidate(lv_layer_sys());
+}
 
 static lv_disp_draw_buf_t draw_buf;
 static lv_color_t *buf1;

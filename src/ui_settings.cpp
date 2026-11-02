@@ -21,7 +21,7 @@ struct StepperDef {
 
 static StepperDef can_steppers[] = {
     {"Odstep zapytan",   &g_settings.poll_interval_ms, 10, 1000, 10, "ms", NULL, NULL},
-    {"Timeout odczytu",  &g_settings.poll_timeout_ms,  10, 1000, 10, "ms", NULL, NULL},
+    {"Timeout odczytu",  &g_settings.poll_timeout_ms,  100, 1000, 50, "ms", NULL, NULL},
     {"Timeout bledow",   &g_settings.dtc_timeout_ms,  500, 10000, 500, "ms", NULL, NULL},
 };
 
@@ -108,10 +108,16 @@ static void start_screen_cb(lv_event_t *e) {
     settings_mark_dirty();
 }
 
+// Pozycje listy: 0 = CAN, 1 = BLE. W trybie DEMO zmieniamy źródło, które wróci po jego wyłączeniu.
 static void data_source_cb(lv_event_t *e) {
-    g_settings.data_source = (uint8_t)lv_dropdown_get_selected(lv_event_get_target(e));
+    uint8_t src = lv_dropdown_get_selected(lv_event_get_target(e)) ? SRC_BLE : SRC_CAN_DIRECT;
+    if (g_settings.data_source == SRC_DEMO) {
+        g_settings.real_source = src;
+        ui_toast("Wlaczony tryb DEMO - wylaczysz go w Info > Serwis");
+    } else {
+        g_settings.data_source = src;
+    }
     settings_mark_dirty();
-    if (g_settings.data_source != SRC_DEMO) ui_toast("Odczyt z auta - w przygotowaniu");
 }
 
 // Ptaszek zapisujący 0/1 w polu ustawień (user_data = wskaźnik na pole)
@@ -131,13 +137,6 @@ static void add_checkbox(lv_obj_t *list, const char *text, uint8_t *field) {
 }
 
 static lv_obj_t *dd_csv;
-static lv_obj_t *dd_log_page;
-
-static void log_page_cb(lv_event_t *e) {
-    g_settings.log_page = (uint8_t)lv_dropdown_get_selected(lv_event_get_target(e));
-    settings_mark_dirty();
-}
-
 static void csv_format_cb(lv_event_t *e) {
     g_settings.csv_format = (uint8_t)lv_dropdown_get_selected(lv_event_get_target(e));
     settings_mark_dirty();
@@ -317,8 +316,9 @@ void settings_page_build(lv_obj_t *page) {
 
     // Źródło danych
     add_section(list, "ZRODLO DANYCH");
-    add_dropdown(list, "Tryb pracy", "DEMO (symulacja)\nCAN - gniazdo OBD\nAdapter BLE (ELM327)",
-                 g_settings.data_source, data_source_cb, NULL);
+    uint8_t src = g_settings.data_source == SRC_DEMO ? g_settings.real_source : g_settings.data_source;
+    add_dropdown(list, "Tryb pracy", "CAN - gniazdo OBD\nAdapter BLE (ELM327)", src == SRC_BLE ? 1 : 0,
+                 data_source_cb, NULL);
     lv_obj_t *ble_row = add_row(list, "Adapter BLE");
     lv_obj_t *ble_btn = make_button(ble_row, "", open_ble_cb, NULL);
     lv_obj_set_size(ble_btn, 230, 40);
@@ -420,11 +420,10 @@ void settings_page_build(lv_obj_t *page) {
     for (StepperDef &d : log_steppers) add_stepper(list, &d);
     dd_csv = add_dropdown(list, "Format pliku", "Excel PL ( ; )\nStandard ( , )", g_settings.csv_format,
                           csv_format_cb, NULL);
-    dd_log_page = add_dropdown(list, "Co zapisywac", "Strona 1\nStrona 2\nStrona 3\nWszystkie strony",
-                               g_settings.log_page, log_page_cb, NULL);
     hint = make_label(list, &lv_font_montserrat_16, COLOR_FAINT,
-                      "Zapisywane sa wartosci z wybranej strony Odczytow (albo wszystkich, bez powtorzen) "
-                      "i serie wykresu. Excel PL: separator srednik i przecinek dziesietny.");
+                      "REC zapisuje ekran, na ktorym go wlaczysz: strone Odczytow albo serie wykresu. "
+                      "Do zatrzymania nagrywania nie mozna zmienic ekranu. "
+                      "Excel PL: separator srednik i przecinek dziesietny.");
     lv_label_set_long_mode(hint, LV_LABEL_LONG_WRAP);
     lv_obj_set_width(hint, lv_pct(100));
 
@@ -483,7 +482,6 @@ void settings_page_refresh() {
 void settings_page_sync() {
     for (int i = 0; i < CHART_SERIES_MAX; i++) series_label_update(i);
     lv_dropdown_set_selected(dd_csv, g_settings.csv_format);
-    lv_dropdown_set_selected(dd_log_page, g_settings.log_page);
     ble_label_update();
     sleep_labels_update();
 }

@@ -143,6 +143,7 @@ static void rebuild() {
             lv_obj_add_event_cb(row, none_cb, LV_EVENT_CLICKED, NULL);
         }
         for (int m = 0; m < modules_count(); m++) {
+            if (m == MODULE_DEMO && g_settings.data_source != SRC_DEMO) continue; // DEMO tylko w trybie DEMO
             const ModuleDef &md = module_def(m);
             uint16_t count = show_all ? md.count : md.basic_count;
             if (!count) continue;

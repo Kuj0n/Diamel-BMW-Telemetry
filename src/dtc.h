@@ -3,7 +3,8 @@
 #include <stdint.h>
 #include "catalog.h"
 
-// Odczyt kodów błędów - tylko na żądanie (przycisk), nigdy cyklicznie. Tylko odczyt: kasowania nie ma.
+// Odczyt kodów błędów - tylko na żądanie (przycisk), nigdy cyklicznie.
+// Kasowanie: tylko jednego modułu naraz (UDS 14 FF FF FF), po potwierdzeniu; potem ponowny odczyt modułu.
 // Auto: UDS 0x19 02 (kody wg maski statusu) dla każdego modułu. Opisy z /diamel/bledy_XX.csv.
 // W trybie DEMO - przykładowe kody z katalogu (symulacja).
 
@@ -26,3 +27,5 @@ const DtcEntry &dtc_entry(int i);
 bool dtc_simulated();            // wyniki z trybu DEMO
 // Zapis wyników do pliku CSV w katalogu logów (pobieranie: strona Pliki / WWW). false = brak karty/wyników
 bool dtc_export(char *name, size_t len);
+// Kasuje kody błędów jednego modułu i czyta go ponownie (wyniki innych modułów zostają)
+void dtc_clear(int module);

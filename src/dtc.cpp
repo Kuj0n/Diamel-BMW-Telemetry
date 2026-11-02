@@ -7,7 +7,9 @@
 #include "settings.h"
 
 #define DEMO_PER_MODULE 2
-#define DTC_STATUS_MASK 0xFF // wszystkie kody, które mają jakikolwiek bit statusu
+// Bity statusu UDS: 0 błąd teraz, 2 oczekujący, 3 potwierdzony (zapisany). Pozostałe bity (np. 4 i 6
+// "test jeszcze niewykonany") ma prawie każdy kod obsługiwany przez sterownik - to nie są błędy.
+#define DTC_STATUS_MASK 0x0D
 
 static volatile DtcState state = DTC_IDLE;
 static DtcEntry *entries; // w PSRAM
@@ -111,6 +113,7 @@ static void read_car() {
         int n = 0;
         for (int j = 0; j < k && n < 64; j++) {
             const uint8_t *rec = resp + 3 + j * 4;
+            if (!(rec[3] & DTC_STATUS_MASK)) continue; // część sterowników ignoruje maskę z zapytania
             codes[n] = ((uint32_t)rec[0] << 16) | (rec[1] << 8) | rec[2];
             st[n++] = rec[3];
         }
@@ -126,7 +129,51 @@ static void read_car() {
     state = DTC_DONE;
 }
 
+static volatile bool clear_req = false;
+
+// Usunięcie z wyników kodów jednego modułu
+static void drop_module(int module) {
+    int n = 0;
+    for (int i = 0; i < count; i++) {
+        if (entries[i].module != module) entries[n++] = entries[i];
+    }
+    count = n;
+}
+
+static void clear_module() {
+    int module = req_module;
+    const ModuleDef &md = module_def(module);
+    if (g_settings.data_source == SRC_DEMO) {
+        drop_module(module);
+        set_status("DEMO: skasowano bledy modulu %s (symulacja)", md.name);
+        state = DTC_DONE;
+        return;
+    }
+    set_status("Kasowanie: %s...", md.name);
+    uint8_t nrc;
+    UdsResult r = uds_clear_dtc(md.addr, &nrc);
+    if (r != UDS_OK) {
+        if (r == UDS_NEGATIVE) set_status("BLAD kasowania %s: sterownik odmowil (kod 0x%02X)", md.name, nrc);
+        else set_status("BLAD kasowania %s: %s", md.name, uds_result_text(r));
+        state = DTC_DONE;
+        return;
+    }
+    // Ponowny odczyt modułu: błędy, które wciąż występują, wrócą od razu
+    drop_module(module);
+    read_car();
+    int left = 0;
+    for (int i = 0; i < count; i++) left += entries[i].module == module;
+    if (left) set_status("Skasowano %s - wrocilo %d (usterka wciaz wystepuje)", md.name, left);
+    else set_status("Skasowano bledy: %s", md.name);
+    state = DTC_DONE;
+}
+
 static void dtc_task(void *) {
+    if (clear_req) {
+        clear_req = false;
+        clear_module();
+        vTaskDelete(NULL);
+    }
     clock_format(read_time, sizeof(read_time));
     if (g_settings.data_source == SRC_DEMO) read_demo();
     else read_car();
@@ -143,6 +190,15 @@ void dtc_read(int module) {
     state = DTC_READING;
     set_status("Odczyt...");
     // Rdzeń 0, duży stos - czytanie pliku opisów z karty
+    xTaskCreatePinnedToCore(dtc_task, "DTC", 10240, NULL, 1, NULL, 0);
+}
+
+void dtc_clear(int module) {
+    if (state == DTC_READING || !entries || module <= 0 || module >= modules_count()) return;
+    req_module = module;
+    clear_req = true;
+    state = DTC_READING;
+    set_status("Kasowanie...");
     xTaskCreatePinnedToCore(dtc_task, "DTC", 10240, NULL, 1, NULL, 0);
 }
 

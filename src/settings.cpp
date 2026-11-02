@@ -39,15 +39,16 @@ static void set_defaults(Settings &s) {
     s.chart_series[0] = P_BOOST_TARGET;
     s.chart_series[1] = P_BOOST_ACTUAL;
     s.chart_series[2] = PARAM_NONE;
-    s.poll_interval_ms = 50;
-    s.poll_timeout_ms = 50;
+    s.poll_interval_ms = 10; // przerwa po każdym zapytaniu - mniej = szybsze odświeżanie
+    s.poll_timeout_ms = 300; // odpowiedź idzie przez bramkę auta - 50 ms to za mało
     s.dtc_timeout_ms = 3000;
     s.stop_no_reply_s = 5;
     s.stop_rpm_zero_min = 5;
     s.log_interval_ms = 200;
     s.csv_format = CSV_EXCEL_PL;
     s.wifi_pass[0] = 0; // wylosowane w settings_load()
-    s.data_source = SRC_DEMO;
+    s.data_source = SRC_CAN_DIRECT;
+    s.real_source = SRC_CAN_DIRECT;
     s.show_fps = 0;
     s.show_cpu = 0;
     // Uśpienie: obroty < 1 przez 5 min (dłużej niż postój start-stop), domyślnie wyłączone
@@ -157,6 +158,9 @@ void settings_load() {
               is_valid(tmp);
     if (ok && tmp.log_interval_ms < 50) tmp.log_interval_ms = 200;
     if (ok && tmp.data_source >= SRC_COUNT) tmp.data_source = SRC_DEMO;
+    if (ok && tmp.real_source != SRC_CAN_DIRECT && tmp.real_source != SRC_BLE) tmp.real_source = SRC_CAN_DIRECT;
+    if (ok && tmp.poll_timeout_ms < 100) tmp.poll_timeout_ms = 300; // stary domyślny 50 ms
+    if (ok && tmp.poll_interval_ms == 50) tmp.poll_interval_ms = 10; // stary domyślny odstęp
     if (ok) {
         tmp.ble_addr[sizeof(tmp.ble_addr) - 1] = 0;
         tmp.ble_name[sizeof(tmp.ble_name) - 1] = 0;
@@ -201,6 +205,18 @@ void settings_tick() {
 
 void settings_flush() {
     if (dirty) settings_save();
+}
+
+void settings_set_demo(bool on) {
+    Settings &s = g_settings;
+    if (on == (s.data_source == SRC_DEMO)) return;
+    if (on) {
+        s.real_source = s.data_source;
+        s.data_source = SRC_DEMO;
+    } else {
+        s.data_source = s.real_source == SRC_BLE ? SRC_BLE : SRC_CAN_DIRECT;
+    }
+    settings_mark_dirty();
 }
 
 const char *data_source_name(uint8_t source) {

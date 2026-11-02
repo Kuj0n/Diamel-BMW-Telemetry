@@ -145,7 +145,7 @@ bool backup_from_json(const char *json, size_t len, Settings &out, int &skipped,
     take(doc["dane"]["zrodlo"], out.data_source, 0, SRC_COUNT - 1);
     take(doc["dane"]["autostart"], out.comm_autostart, 0, 1);
     take(doc["dane"]["odstep_ms"], out.poll_interval_ms, 10, 1000);
-    take(doc["dane"]["timeout_ms"], out.poll_timeout_ms, 10, 1000);
+    take(doc["dane"]["timeout_ms"], out.poll_timeout_ms, 100, 1000);
     take(doc["dane"]["timeout_bledow_ms"], out.dtc_timeout_ms, 500, 10000);
 
     JsonObjectConst sl = doc["usypianie"];

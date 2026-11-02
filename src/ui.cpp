@@ -18,7 +18,7 @@ extern const lv_img_dsc_t bmw_logo;
 
 static const char *PAGE_TITLES[PAGE_COUNT] = {
     "Menu", "Odczyty", "Odczyty", "Odczyty", "Wykres", "Bledy", "Pliki", "Wi-Fi", "Ustawienia", "Wybor odczytow",
-    "Wybierz wartosc", "Informacje", "Adapter BLE", "Siec domowa"};
+    "Wybierz wartosc", "Informacje", "Adapter BLE", "Siec domowa", "Serwis", "Filtr DPF"};
 
 static lv_obj_t *page_obj[PAGE_COUNT]; // kontener strony (dla stron przesuwanych - kafelek)
 static lv_obj_t *tileview;
@@ -95,6 +95,11 @@ static void set_title(Page p) {
 }
 
 void ui_show(Page page) {
+    // Podczas nagrywania zostajemy na ekranie, z którego nagrywamy (komunikacja czyta tylko to, co widać)
+    if (logger_active() && page != active_page) {
+        ui_toast("Najpierw zatrzymaj nagrywanie (REC)");
+        return;
+    }
     for (int i = 0; i < PAGE_COUNT; i++) {
         if (!is_swipe_page((Page)i)) lv_obj_add_flag(page_obj[i], LV_OBJ_FLAG_HIDDEN);
     }
@@ -107,8 +112,10 @@ void ui_show(Page page) {
     }
     active_page = page;
     set_title(page);
+    display_redraw(); // przy zmianie strony cały ekran od nowa - przesunięcie znika
     if (page == PAGE_FILES) files_page_open();
     if (page == PAGE_INFO) info_page_open();
+    if (page == PAGE_DPF) dpf_page_open();
     if (page == PAGE_WIFI) wifi_page_refresh();
     if (page == PAGE_BLE) ble_page_open();
     if (page == PAGE_WIFI_HOME) wifi_home_page_open();
@@ -217,7 +224,11 @@ static void rec_cb(lv_event_t *e) {
     bool on = lv_obj_has_state(btn_rec, LV_STATE_CHECKED);
     if (!on) {
         logger_stop();
-    } else if (!logger_start()) {
+    } else if (!is_swipe_page(active_page) && active_page != PAGE_CHART) {
+        // Nagrywamy to, co widać - tylko ze stron Odczytów albo z Wykresu
+        lv_obj_clear_state(btn_rec, LV_STATE_CHECKED);
+        ui_toast("Nagrywanie: przejdz na strone Odczytow albo Wykres");
+    } else if (!logger_start(is_swipe_page(active_page) ? active_page - PAGE_LIVE : VIEW_CHART)) {
         lv_obj_clear_state(btn_rec, LV_STATE_CHECKED);
         ui_toast("Brak karty SD");
     }
@@ -254,6 +265,13 @@ static void build_status_bar() {
 
     lbl_title = make_label(bar, &lv_font_montserrat_20, COLOR_TEXT, "");
     lv_obj_align(lbl_title, LV_ALIGN_LEFT_MID, 66, 0);
+    // Przytrzymanie tytułu = przerysowanie całego ekranu (gdy obraz się przesunie)
+    lv_obj_add_flag(lbl_title, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_ext_click_area(lbl_title, 12);
+    lv_obj_add_event_cb(lbl_title, [](lv_event_t *) {
+        display_redraw();
+        ui_toast("Ekran przerysowany");
+    }, LV_EVENT_LONG_PRESSED, NULL);
 
     // Źródło danych: DEMO na pomarańczowo (wartości symulowane), auto na szaro
     lbl_source = make_label(bar, &lv_font_montserrat_16, COLOR_ACCENT, "");
@@ -290,6 +308,7 @@ static const MenuItem MENU_ITEMS[] = {
     {LV_SYMBOL_LIST,     "Odczyty",    PAGE_LIVE},
     {LV_SYMBOL_IMAGE,    "Wykres",     PAGE_CHART},
     {LV_SYMBOL_WARNING,  "Bledy",      PAGE_DTC},
+    {LV_SYMBOL_CHARGE,   "DPF",        PAGE_DPF},
     {LV_SYMBOL_SD_CARD,  "Pliki",      PAGE_FILES},
     {LV_SYMBOL_WIFI,     "Wi-Fi",      PAGE_WIFI},
     {LV_SYMBOL_SETTINGS, "Ustawienia", PAGE_SETTINGS},
@@ -395,7 +414,15 @@ static void banner_refresh() {
 }
 
 static void status_refresh() {
-    set_text_if_changed(lbl_source, data_source_name(g_settings.data_source));
+    // Szybkość odczytu: pełne cykle na sekundę (wszystkie wartości z ekranu odświeżone)
+    uint16_t rate = comm_rate_x10();
+    char src[24];
+    if (rate && g_settings.data_source != SRC_DEMO) {
+        snprintf(src, sizeof(src), "%s %u.%u/s", data_source_name(g_settings.data_source), rate / 10, rate % 10);
+    } else {
+        strlcpy(src, data_source_name(g_settings.data_source), sizeof(src));
+    }
+    set_text_if_changed(lbl_source, src);
     // DEMO pomarańczowo; auto: szaro = zatrzymana, zielono = odpowiada, czerwono = błąd połączenia
     lv_color_t c = COLOR_ACCENT;
     if (g_settings.data_source != SRC_DEMO) {
@@ -444,6 +471,17 @@ static void build_perf_label() {
 
 static void refresh_cb(lv_timer_t *) {
     apply_web_settings();
+    // Nagrywanie blokuje też przesuwanie stron Odczytów palcem
+    static bool locked = false;
+    if (logger_active() != locked) {
+        locked = logger_active();
+        if (locked) lv_obj_clear_flag(tileview, LV_OBJ_FLAG_SCROLLABLE);
+        else lv_obj_add_flag(tileview, LV_OBJ_FLAG_SCROLLABLE);
+    }
+    // Komunikacja odpytuje tylko to, co jest na ekranie
+    comm_set_view(is_swipe_page(active_page) ? active_page - PAGE_LIVE
+                  : active_page == PAGE_CHART ? VIEW_CHART
+                  : active_page == PAGE_DPF   ? VIEW_LIST : VIEW_NONE);
 
 
     // Wykres zbiera próbki zawsze, żeby historia była ciągła po przejściu na stronę
@@ -456,6 +494,8 @@ static void refresh_cb(lv_timer_t *) {
         case PAGE_LIVE3:    live_refresh(active_page - PAGE_LIVE); break;
         case PAGE_CHART:    chart_refresh_labels(); break;
         case PAGE_INFO:     info_page_refresh(); break;
+        case PAGE_SERVICE:  service_page_refresh(); break;
+        case PAGE_DPF:      dpf_page_refresh(); break;
         case PAGE_WIFI:     wifi_page_refresh(); break;
         case PAGE_DTC:      dtc_page_refresh(); break;
         case PAGE_SETTINGS: settings_page_refresh(); break;
@@ -518,6 +558,8 @@ static void build_main() {
     live_editor_build(page_obj[PAGE_LIVE_EDIT]);
     picker_build(page_obj[PAGE_PICKER]);
     info_page_build(page_obj[PAGE_INFO]);
+    service_page_build(page_obj[PAGE_SERVICE]);
+    dpf_page_build(page_obj[PAGE_DPF]);
     ble_page_build(page_obj[PAGE_BLE]);
     wifi_home_page_build(page_obj[PAGE_WIFI_HOME]);
     build_status_bar();

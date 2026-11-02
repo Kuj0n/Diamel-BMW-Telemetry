@@ -1,4 +1,5 @@
 #include "ui_internal.h"
+#include "psram.h"
 #include <Arduino.h>
 #include <SD.h>
 #include "logger.h"
@@ -16,7 +17,7 @@ static lv_obj_t *lbl_card;
 static lv_obj_t *list;
 static lv_obj_t *btn_delete_all;
 static lv_obj_t *format_box; // okno "Formatowanie..." na czas pracy zadania w tle
-static FileEntry files[MAX_FILES];
+static FileEntry *files = psram_alloc<FileEntry>(MAX_FILES); // PSRAM działa przed konstruktorami
 static int file_count;
 
 static void reload();

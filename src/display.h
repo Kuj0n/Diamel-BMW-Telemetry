@@ -14,3 +14,7 @@ void display_sleep(bool on);
 bool display_take_wake();
 // Obraz ekranu (RGB565, 480x480, w PSRAM) - do zrzutów ekranu przez WWW
 const uint16_t *display_framebuffer();
+// Ustawia obraz panelu RGB od nowa (po przesunięciu) - niewidocznie, w przerwie między klatkami
+void display_resync();
+// Ustawia obraz od nowa i przerysowuje cały ekran (z zadania LVGL)
+void display_redraw();

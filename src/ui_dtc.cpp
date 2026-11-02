@@ -1,4 +1,5 @@
 #include "ui_internal.h"
+#include "psram.h"
 #include <Arduino.h>
 #include "dtc.h"
 
@@ -10,6 +11,24 @@ static lv_obj_t *lbl_status;
 static lv_obj_t *list;
 static int dd_modules[64]; // pozycja listy (bez "Wszystkie") -> moduł
 static DtcState prev_state = DTC_IDLE;
+static lv_obj_t *armed_btn;   // przycisk "Kasuj" czekający na potwierdzenie
+static uint32_t armed_ms;
+
+// Pierwsze dotknięcie: "Na pewno?", drugie w ciągu 4 s kasuje błędy tego modułu
+static void clear_cb(lv_event_t *e) {
+    lv_obj_t *btn = lv_event_get_target(e);
+    int module = (int)(intptr_t)lv_event_get_user_data(e);
+    if (armed_btn != btn || millis() - armed_ms > 4000) {
+        if (armed_btn) lv_label_set_text(lv_obj_get_child(armed_btn, 0), LV_SYMBOL_TRASH " Kasuj");
+        armed_btn = btn;
+        armed_ms = millis();
+        lv_label_set_text(lv_obj_get_child(btn, 0), "Na pewno?");
+        lv_obj_set_style_bg_color(btn, lv_color_hex(0xB71C1C), 0);
+        return;
+    }
+    armed_btn = NULL;
+    dtc_clear(module);
+}
 
 static void read_cb(lv_event_t *) {
     uint16_t sel = lv_dropdown_get_selected(dd_module);
@@ -24,6 +43,7 @@ static void export_cb(lv_event_t *) {
 }
 
 static void results_rebuild() {
+    armed_btn = NULL;
     lv_obj_clean(list);
     if (dtc_state() != DTC_DONE) return;
     int n = dtc_count();
@@ -36,8 +56,14 @@ static void results_rebuild() {
         const DtcEntry &e = dtc_entry(i);
         if (e.module != last_module) {
             last_module = e.module;
-            lv_obj_t *h = make_label(list, &lv_font_montserrat_16, module_color(e.module), module_def(e.module).name);
-            lv_obj_set_style_pad_top(h, 8, 0);
+            lv_obj_t *head = plain_cont(list);
+            lv_obj_set_size(head, lv_pct(100), 44);
+            lv_obj_set_style_pad_top(head, 6, 0);
+            lv_obj_t *h = make_label(head, &lv_font_montserrat_16, module_color(e.module), module_def(e.module).name);
+            lv_obj_align(h, LV_ALIGN_LEFT_MID, 0, 0);
+            lv_obj_t *del = make_button(head, LV_SYMBOL_TRASH " Kasuj", clear_cb, (void *)(intptr_t)e.module);
+            lv_obj_set_size(del, 130, 38);
+            lv_obj_align(del, LV_ALIGN_RIGHT_MID, 0, 0);
         }
         lv_obj_t *row = plain_cont(list);
         lv_obj_set_size(row, lv_pct(100), LV_SIZE_CONTENT);
@@ -72,16 +98,19 @@ void dtc_page_refresh() {
 
 void dtc_page_build(lv_obj_t *page) {
     // Lista modułów: tylko te, dla których katalog ma opisy błędów
-    static char options[1600];
-    size_t o = snprintf(options, sizeof(options), "Wszystkie moduly");
+    const size_t OPT_LEN = 1600;
+    char *options = psram_alloc<char>(OPT_LEN);
+    if (!options) return;
+    size_t o = snprintf(options, OPT_LEN, "Wszystkie moduly");
     int k = 0;
-    for (int m = 1; m < modules_count() && k < 64 && o < sizeof(options) - 40; m++) {
+    for (int m = 1; m < modules_count() && k < 64 && o < OPT_LEN - 40; m++) {
         if (!module_def(m).dtc_count) continue;
-        o += snprintf(options + o, sizeof(options) - o, "\n%s", module_def(m).name);
+        o += snprintf(options + o, OPT_LEN - o, "\n%s", module_def(m).name);
         dd_modules[k++] = m;
     }
     dd_module = lv_dropdown_create(page);
-    lv_dropdown_set_options(dd_module, options);
+    lv_dropdown_set_options(dd_module, options); // LVGL kopiuje tekst
+    free(options);
     lv_obj_set_style_text_font(dd_module, &lv_font_montserrat_16, 0);
     lv_obj_set_size(dd_module, 220, 44);
     lv_obj_set_pos(dd_module, 8, 6);
@@ -108,8 +137,8 @@ void dtc_page_build(lv_obj_t *page) {
     lv_obj_set_style_pad_row(list, 6, 0);
     lv_obj_set_flex_flow(list, LV_FLEX_FLOW_COLUMN);
     lv_obj_t *hint = make_label(list, &lv_font_montserrat_16, COLOR_FAINT,
-                                "Odczyt tylko po nacisnieciu przycisku. Tylko odczyt - kasowanie bledow jest wylaczone. "
-                                LV_SYMBOL_SAVE " zapisuje wynik do pliku (strona Pliki / WWW).");
+                                "Odczyt tylko po nacisnieciu przycisku. " LV_SYMBOL_SAVE " zapisuje wynik do pliku "
+                                "(Pliki / WWW). Kasowanie: przycisk przy module (dwa dotkniecia) - tylko ten modul.");
     lv_label_set_long_mode(hint, LV_LABEL_LONG_WRAP);
     lv_obj_set_width(hint, lv_pct(100));
     dtc_page_refresh();

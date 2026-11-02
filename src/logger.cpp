@@ -51,6 +51,8 @@ void logger_new_name(const char *prefix, char *name, size_t len) {
 }
 
 // Kolumny = wartości z wybranej strony Odczytów (albo wszystkich) + serie wykresu, bez powtórzeń
+static volatile int log_view = 0; // ekran, z którego włączono nagrywanie
+
 static int collect_columns(uint16_t *cols) {
     int n = 0;
     auto add = [&](uint16_t id) {
@@ -60,13 +62,13 @@ static int collect_columns(uint16_t *cols) {
         }
         cols[n++] = id;
     };
-    // Wybrana strona Odczytów albo wszystkie strony (bez powtórzeń)
-    bool all = g_settings.log_page >= LOG_ALL_PAGES;
-    int from = all ? 0 : g_settings.log_page, to = all ? LIVE_PAGES : from + 1;
-    for (int p = from; p < to; p++) {
-        for (int i = 0; i < g_settings.page_count[p]; i++) add(g_settings.page_ids[p][i]);
+    // Tylko ekran, z którego włączono nagrywanie: strona Odczytów albo serie wykresu
+    int v = log_view;
+    if (v >= 0 && v < LIVE_PAGES) {
+        for (int i = 0; i < g_settings.page_count[v]; i++) add(g_settings.page_ids[v][i]);
+    } else {
+        for (int i = 0; i < CHART_SERIES_MAX; i++) add(g_settings.chart_series[i]);
     }
-    for (int i = 0; i < CHART_SERIES_MAX; i++) add(g_settings.chart_series[i]);
     return n;
 }
 
@@ -185,8 +187,9 @@ void logger_init() {
 
 bool logger_sd_ok() { return sd_ok; }
 
-bool logger_start() {
+bool logger_start(int view) {
     if (!sd_ok) return false;
+    log_view = view;
     want = true;
     return true;
 }

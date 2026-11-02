@@ -1,4 +1,5 @@
 #include "wifi_web.h"
+#include "psram.h"
 #include <Arduino.h>
 #include <WiFi.h>
 #include <ESPmDNS.h>
@@ -10,6 +11,7 @@
 #include "backup.h"
 #include "catalog.h"
 #include "clock.h"
+#include "comm.h"
 #include "config.h"
 #include "display.h"
 #include "logger.h"
@@ -128,9 +130,7 @@ progress{width:100%;height:18px}
 <div id="found"></div>
 <h3>FORMAT LOGU CSV</h3>
 <select id="csv"><option value="0">Excel PL (srednik, przecinek dziesietny)</option><option value="1">Standard (przecinek, kropka dziesietna)</option></select>
-<h3>LOG CSV - CO ZAPISYWAC</h3>
-<select id="logp"><option value="0">Strona 1</option><option value="1">Strona 2</option><option value="2">Strona 3</option><option value="3">Wszystkie strony (bez powtorzen)</option></select>
-<p class="hint">Do logu zawsze dochodza serie wykresu.</p>
+<p class="hint">Log (REC na wyswietlaczu) zapisuje ekran, na ktorym go wlaczono: strone Odczytow albo serie wykresu.</p>
 <p><button class="btn pri" id="save">Zapisz w urzadzeniu</button> <button class="btn" id="undo">Cofnij zmiany</button></p>
 <div id="smsg" class="msg"></div>
 </section>
@@ -250,7 +250,7 @@ $('#format').onclick=async()=>{const m=$('#fmsg');
 
 // --- Ustawienia ---
 function editStart(){E={pages:S.pages.map(p=>[...p]),chart:[...S.chart],csv:S.csv,log:S.log_page};E.live=E.pages[ep];
- $('#logp').value=E.log;$('#smsg').textContent='';renderEdit()}
+ $('#smsg').textContent='';renderEdit()}
 function renderEdit(){const s=$('#sel');s.innerHTML='';tabs('etabs',ep,i=>{ep=i;E.live=E.pages[ep];renderEdit()});
  E.live.forEach((p,k)=>{const r=el('div','row');r.append(el('span','n',(k+1)+'. '+p[1]),el('span','s',modName(p[4])));
   const up=el('button','btn','↑'),dn=el('button','btn','↓'),x=el('button','btn del','✕');
@@ -292,7 +292,6 @@ function fillModules(){['#mod','#cmod'].forEach(id=>{const s=$(id);s.innerHTML='
  const o=el('option',null,'Wszystkie moduly');o.value=-1;s.append(o);
  M.forEach(m=>{const op=el('option',null,m[1]+' ('+m[2]+')');op.value=m[0];s.append(op)})})}
 $('#csv').onchange=()=>{E.csv=+$('#csv').value};
-$('#logp').onchange=()=>{E.log=+$('#logp').value};
 $('#undo').onclick=editStart;
 $('#csave').onclick=()=>save($('#cmsg2'));
 $('#save').onclick=()=>save($('#smsg'));
@@ -455,7 +454,7 @@ static void handle_params(AsyncWebServerRequest *req) {
     doc["catalog"] = text;
     JsonArray mods = doc["modules"].to<JsonArray>();
     for (int m = 0; m < modules_count(); m++) {
-        if (!module_def(m).count) continue;
+        if (!module_def(m).count || (m == MODULE_DEMO && g_settings.data_source != SRC_DEMO)) continue;
         JsonArray a = mods.add<JsonArray>();
         a.add(m);
         a.add(module_def(m).name);
@@ -644,10 +643,13 @@ static void handle_live(AsyncWebServerRequest *req) {
     String ids = req->hasParam("ids") ? req->getParam("ids")->value() : String();
     const char *s = ids.c_str();
     int n = 0;
+    uint16_t watch[PAGE_MAX + CHART_SERIES_MAX];
+    int nw = 0;
     while (*s && n < PAGE_MAX + CHART_SERIES_MAX) {
         char *end;
         long id = strtol(s, &end, 10);
         if (end == s) break;
+        if (id >= 0 && id < params_count()) watch[nw++] = (uint16_t)id;
         char buf[48] = "--";
         float val;
         if (id >= 0 && id < params_count() && telemetry_value(id, val)) {
@@ -659,6 +661,7 @@ static void handle_live(AsyncWebServerRequest *req) {
         n++;
         s = *end == ',' ? end + 1 : end;
     }
+    comm_web_watch(watch, nw); // podgląd w przeglądarce też jest "oglądaniem"
     send_json(req, doc);
 }
 
@@ -863,7 +866,8 @@ static void handle_catalog_delete(AsyncWebServerRequest *req) {
 
 static void handle_catalog_clear(AsyncWebServerRequest *req) {
     if (!logger_sd_ok()) return req->send(409, "text/plain", "Brak karty SD");
-    static char names[64][24];
+    static auto names = (char (*)[24])psram_alloc<char>(64 * 24);
+    if (!names) return req->send(500, "text/plain", "Brak pamieci");
     int count = 0;
     File dir = SD.open(CATALOG_DIR);
     if (dir) {
@@ -906,7 +910,8 @@ static void handle_delete(AsyncWebServerRequest *req) {
 static void handle_delete_all(AsyncWebServerRequest *req) {
     if (!logger_sd_ok()) return req->send(409, "text/plain", "Brak karty SD");
     // Najpierw lista, potem usuwanie - bez zmieniania katalogu w trakcie jego czytania
-    static char names[200][24];
+    static auto names = (char (*)[24])psram_alloc<char>(200 * 24);
+    if (!names) return req->send(500, "text/plain", "Brak pamieci");
     int count = 0;
     File dir = SD.open(LOG_DIR);
     if (dir) {
@@ -1098,8 +1103,9 @@ static void connect_tick() {
             static char msg[64];
             snprintf(msg, sizeof(msg), "Wi-Fi: polaczono (%s)", ip_text);
             message = msg;
-            Serial.printf("Wi-Fi: polaczono z %s, adres http://%s, http://%s.local\n", g_settings.home_ssid, ip_text,
-                          MDNS_NAME);
+            Serial.printf("Wi-Fi: polaczono z %s, adres http://%s, http://%s.local, wolny RAM wewn.: %u KB\n",
+                          g_settings.home_ssid, ip_text, MDNS_NAME,
+                          (unsigned)(heap_caps_get_free_size(MALLOC_CAP_INTERNAL) / 1024));
         } else if (millis() - connect_ms > HOME_CONNECT_TIMEOUT_MS) {
             Serial.println("Wi-Fi: brak sieci domowej - wlaczam wlasna siec");
             WiFi.disconnect(true);

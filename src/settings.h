@@ -67,7 +67,8 @@ struct Settings {
     uint16_t page_ids[LIVE_PAGES][PAGE_MAX];  // indeksy w rejestrze (do restartu)
     uint32_t page_refs[LIVE_PAGES][PAGE_MAX]; // trwałe identyfikatory (param_ref)
     uint8_t pages_magic;                      // REFS_MAGIC = strony wypełnione (przeniesione ze starej listy)
-    uint8_t log_page;                         // co logować: strona 0-2 albo LOG_ALL_PAGES
+    uint8_t log_page;                         // (nieużywane) dawny wybór strony logu
+    uint8_t real_source;                      // CAN albo BLE - wraca po wyłączeniu DEMO (Serwis)
 };
 
 extern Settings g_settings;
@@ -86,3 +87,5 @@ void settings_flush();
 void settings_new_wifi_password();
 // Krótka nazwa źródła danych do paska statusu / strony WWW
 const char *data_source_name(uint8_t source);
+// Tryb DEMO włączany w Serwisie: zapamiętuje źródło CAN/BLE i przywraca je po wyłączeniu
+void settings_set_demo(bool on);

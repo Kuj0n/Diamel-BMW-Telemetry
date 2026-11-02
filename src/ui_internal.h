@@ -33,6 +33,8 @@ enum Page : uint8_t {
     PAGE_INFO,
     PAGE_BLE,
     PAGE_WIFI_HOME,
+    PAGE_SERVICE,
+    PAGE_DPF,
     PAGE_COUNT
 };
 
@@ -87,6 +89,11 @@ void settings_page_refresh(); // odliczanie do uśpienia
 void info_page_build(lv_obj_t *page);
 void info_page_open();
 void info_page_refresh();
+void service_page_build(lv_obj_t *page); // ui_service.cpp
+void service_page_refresh();
+void dpf_page_build(lv_obj_t *page); // ui_dpf.cpp
+void dpf_page_open();
+void dpf_page_refresh();
 
 // Kody błędów - odczyt na żądanie (ui_dtc.cpp)
 void dtc_page_build(lv_obj_t *page);

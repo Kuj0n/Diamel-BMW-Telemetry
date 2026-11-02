@@ -38,6 +38,43 @@ XOR_KEY = 0xF7
 CATALOG_VERSION = 2
 VEHICLE = "BMW F31 B47 xDrive"
 
+# Standardowe OBD-II (tryb 01, SAE J1979) - działa w każdym aucie z silnikiem spalinowym od ok. 2004 r.
+# W F31 sterownik silnika nie podaje pomiarów przez numery BMW (odmowa 0x31), za to odpowiada na OBD-II.
+# Moduł wirtualny o adresie EF (urządzenie pyta wtedy 0x7DF / 0x7E8). Wiersz: PID, nazwa, typ, pozycja
+# (od bajtu A), mnożnik, przesunięcie, jednostka, miejsca po przecinku, czy lista podstawowa.
+OBD_ADDR = "EF"
+OBD_PIDS = [
+    ("0C", "Obroty silnika", "U16", 0, 0.25, 0, "rpm", 0, 1),
+    ("05", "Temperatura plynu chlodzacego", "U8", 0, 1, -40, "°C", 0, 1),
+    ("0F", "Temperatura powietrza dolotowego", "U8", 0, 1, -40, "°C", 0, 1),
+    ("46", "Temperatura otoczenia", "U8", 0, 1, -40, "°C", 0, 1),
+    ("5C", "Temperatura oleju", "U8", 0, 1, -40, "°C", 0, 1),
+    ("0B", "Cisnienie w kolektorze dolotowym", "U8", 0, 1, 0, "kPa", 0, 1),
+    ("33", "Cisnienie atmosferyczne", "U8", 0, 1, 0, "kPa", 0, 0),
+    ("04", "Obciazenie silnika", "U8", 0, 0.392157, 0, "%", 0, 1),
+    ("62", "Moment obrotowy rzeczywisty", "U8", 0, 1, -125, "%", 0, 1),
+    ("61", "Moment obrotowy zadany przez kierowce", "U8", 0, 1, -125, "%", 0, 0),
+    ("10", "Przeplyw powietrza (MAF)", "U16", 0, 0.01, 0, "g/s", 1, 1),
+    ("23", "Cisnienie paliwa w szynie", "U16", 0, 0.1, 0, "bar", 0, 1),
+    ("5E", "Zuzycie paliwa", "U16", 0, 0.05, 0, "l/h", 1, 1),
+    ("2C", "EGR zadane", "U8", 0, 0.392157, 0, "%", 0, 0),
+    ("0D", "Predkosc pojazdu", "U8", 0, 1, 0, "km/h", 0, 1),
+    ("2F", "Poziom paliwa", "U8", 0, 0.392157, 0, "%", 0, 1),
+    ("42", "Napiecie modulu sterujacego", "U16", 0, 0.001, 0, "V", 2, 1),
+    ("1F", "Czas pracy od uruchomienia", "U16", 0, 1, 0, "s", 0, 0),
+    ("31", "Przebieg od skasowania bledow", "U16", 0, 1, 0, "km", 0, 0),
+    ("21", "Przebieg z kontrolka silnika", "U16", 0, 1, 0, "km", 0, 0),
+]
+
+
+def obd_rows():
+    rows = []
+    for pid, name, typ, pos, mul, add, unit, dec, basic in OBD_PIDS:
+        rows.append([OBD_ADDR, f"obd_{pid.lower()}", name, f"00{pid}", typ, str(pos), "0", "BE", fmt_num(mul),
+                     fmt_num(add), unit, str(dec), "", f"OBD-II PID {pid}", str(basic)])
+    return rows
+
+
 # Sterowniki wykryte w aucie: SGBD -> polska nazwa modułu
 CAR_ECUS = {
     "AAG_F15": "Modul haka holowniczego",
@@ -666,6 +703,7 @@ def main():
         f.write("adres;sgbd;nazwa;parametry;bledy;uwagi\n")
         for m in sorted(modules):
             f.write(";".join(m) + "\n")
+        f.write(f"{OBD_ADDR};OBD2;OBD-II (silnik);{len(OBD_PIDS)};0;standard SAE J1979, tryb 01\n")
     with open(out_dir / "parametry.csv", "w", encoding="utf-8", newline="\n") as f:
         f.write(meta)
         f.write("adres;klucz;nazwa;did;typ;pozycja;maska;kolejnosc;mnoznik;przesuniecie;jednostka;miejsca;teksty;opis;"
@@ -678,6 +716,9 @@ def main():
                 if (row[0], row[2]) in seen:
                     row[-1] = "0"
                 seen.add((row[0], row[2]))
+            basic += row[-1] == "1"
+            f.write(";".join(row) + "\n")
+        for row in obd_rows():
             basic += row[-1] == "1"
             f.write(";".join(row) + "\n")
     print(f"Lista podstawowa: {basic} parametrow (pozostale w 'wszystkie')")

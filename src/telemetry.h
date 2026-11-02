@@ -79,4 +79,4 @@ bool telemetry_value(uint16_t idx, float &out);
 // Zadanie danych: w trybie DEMO generuje symulację, w trybie auta (CAN)
 // na razie oznacza wszystko jako brak wartości - odczyt z auta dojdzie w kolejnym etapie.
 // Źródło (g_settings.data_source) można zmieniać w trakcie pracy.
-void telemetry_start();
+void telemetry_start(); // uruchamia symulację, jeśli DEMO włączone (wołać też po włączeniu DEMO)

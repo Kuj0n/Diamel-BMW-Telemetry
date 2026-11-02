@@ -9,7 +9,8 @@
 
 void logger_init();      // montuje kartę i uruchamia zadanie zapisu (po inicjalizacji ekranu - wspólne piny)
 bool logger_sd_ok();
-bool logger_start();     // false = brak karty
+// Log zapisuje ekran, z którego go włączono: view 0..2 = strona Odczytów, VIEW_CHART = serie wykresu
+bool logger_start(int view); // false = brak karty
 void logger_stop();
 bool logger_active();
 uint32_t logger_elapsed_ms();

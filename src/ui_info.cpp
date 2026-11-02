@@ -1,9 +1,8 @@
 #include "ui_internal.h"
+#include "psram.h"
 #include <Arduino.h>
 #include <SD.h>
-#include "can_test.h"
 #include "catalog.h"
-#include "comm.h"
 #include "display.h"
 #include "logger.h"
 #include "settings.h"
@@ -13,8 +12,6 @@
 // --- Strona Info: wersja, autor, stan sprzętu i test toru CAN ---
 static lv_obj_t *lbl_hw;
 static lv_obj_t *lbl_runtime;
-static lv_obj_t *lbl_can;
-static lv_obj_t *btn_can;
 static lv_obj_t *lbl_catalog;
 static lv_obj_t *lbl_modules;
 static lv_obj_t *btn_restart;
@@ -29,43 +26,6 @@ static lv_obj_t *add_text(lv_obj_t *list, lv_color_t color) {
     lv_label_set_long_mode(l, LV_LABEL_LONG_WRAP);
     lv_obj_set_width(l, lv_pct(100));
     return l;
-}
-
-static void run_can_test(lv_timer_t *) {
-    CanTestResult r;
-    bool ok = can_self_test(r);
-    if (!r.driver_ok) {
-        lv_label_set_text(lbl_can, "BLAD: nie udalo sie uruchomic kontrolera CAN.");
-        lv_obj_set_style_text_color(lbl_can, COLOR_REC_ON, 0);
-    } else if (ok) {
-        lv_label_set_text_fmt(lbl_can, "OK: odebrano %d/%d ramek.\nTX (IO40), transceiver i RX (IO2) dzialaja.",
-                              r.received, r.sent);
-        lv_obj_set_style_text_color(lbl_can, lv_color_hex(0x81C784), 0);
-    } else {
-        lv_label_set_text_fmt(lbl_can,
-                              "BLAD: odebrano %d/%d ramek (bledy TX %u, RX %u%s).\n"
-                              "Sprawdz: zasilanie 3.3V transceivera (S3), przewody TX/RX, "
-                              "czy TX/RX nie sa zamienione. Bez auta pomaga tez tymczasowy "
-                              "rezystor 120 Ohm miedzy CANH i CANL.",
-                              r.received, r.sent, (unsigned)r.tx_errors, (unsigned)r.rx_errors,
-                              r.bus_off ? ", bus off" : "");
-        lv_obj_set_style_text_color(lbl_can, COLOR_REC_ON, 0);
-    }
-    lv_obj_clear_state(btn_can, LV_STATE_DISABLED);
-}
-
-static void can_test_cb(lv_event_t *) {
-    // Test potrzebuje kontrolera CAN na wyłączność (i nie wolno go robić w aucie)
-    if (!uds_release()) {
-        ui_toast("Najpierw zatrzymaj komunikacje (Menu > Stop)");
-        return;
-    }
-    lv_obj_add_state(btn_can, LV_STATE_DISABLED);
-    lv_label_set_text(lbl_can, "Test w toku...");
-    lv_obj_set_style_text_color(lbl_can, COLOR_DIM, 0);
-    // Test blokuje na ~1 s - uruchamiamy po odświeżeniu ekranu, żeby napis zdążył się pokazać
-    lv_timer_t *t = lv_timer_create(run_can_test, 50, NULL);
-    lv_timer_set_repeat_count(t, 1);
 }
 
 // Restart (np. żeby wczytać nowy katalog) - drugie dotknięcie potwierdza
@@ -111,14 +71,19 @@ static void catalog_refresh() {
     lv_obj_set_style_text_color(lbl_catalog, COLOR_TEXT, 0);
 
     // Moduły: adres, nazwa, liczba parametrów i kodów błędów
-    static char buf[1600];
+    const size_t BUF_LEN = 1600;
+    static char *buf = psram_alloc<char>(BUF_LEN);
     size_t o = 0;
-    for (int m = 1; m < modules_count() && o < sizeof(buf) - 80; m++) {
+    for (int m = 1; m < modules_count() && o < BUF_LEN - 80; m++) {
         const ModuleDef &md = module_def(m);
-        o += snprintf(buf + o, sizeof(buf) - o, "%s%02X  %s: %u param., %u bledow", o ? "\n" : "", md.addr, md.name,
+        o += snprintf(buf + o, BUF_LEN - o, "%s%02X  %s: %u param., %u bledow", o ? "\n" : "", md.addr, md.name,
                       md.count, md.dtc_count);
     }
     lv_label_set_text(lbl_modules, buf);
+}
+
+static void service_cb(lv_event_t *) {
+    ui_show(PAGE_SERVICE);
 }
 
 void info_page_build(lv_obj_t *page) {
@@ -136,6 +101,17 @@ void info_page_build(lv_obj_t *page) {
     lv_label_set_text_fmt(about, "Wersja %s (kompilacja %s)\nAutor: %s\nPojazd: %s",
                           FW_VERSION, __DATE__, FW_AUTHOR, FW_VEHICLE);
 
+    // Najczęściej używane na górze: Serwis i restart obok siebie
+    lv_obj_t *actions = plain_cont(list);
+    lv_obj_set_size(actions, lv_pct(100), 54);
+    lv_obj_set_style_pad_top(actions, 8, 0);
+    lv_obj_t *svc = make_button(actions, LV_SYMBOL_SETTINGS " Serwis", service_cb, NULL);
+    lv_obj_set_size(svc, 190, 46);
+    lv_obj_align(svc, LV_ALIGN_LEFT_MID, 0, 0);
+    btn_restart = make_button(actions, LV_SYMBOL_REFRESH " Uruchom ponownie", restart_cb, NULL);
+    lv_obj_set_size(btn_restart, 240, 46);
+    lv_obj_align(btn_restart, LV_ALIGN_RIGHT_MID, 0, 0);
+
     add_section(list, "SPRZET");
     lbl_hw = add_text(list, COLOR_TEXT);
     lbl_runtime = add_text(list, COLOR_DIM);
@@ -143,22 +119,10 @@ void info_page_build(lv_obj_t *page) {
     add_section(list, "KATALOG PARAMETROW (KARTA SD /diamel)");
     lbl_catalog = add_text(list, COLOR_TEXT);
     lbl_modules = add_text(list, COLOR_DIM);
-    btn_restart = make_button(list, LV_SYMBOL_REFRESH " Uruchom ponownie", restart_cb, NULL);
-    lv_obj_set_size(btn_restart, 260, 46);
     lv_obj_t *restart_hint = add_text(list, COLOR_FAINT);
-    lv_label_set_text(restart_hint, "Katalog wczytuje sie przy starcie - po wgraniu nowych plikow przez WWW uruchom ponownie.");
-
-    add_section(list, "MAGISTRALA CAN");
-    lv_obj_t *can_info = add_text(list, COLOR_TEXT);
-    lv_label_set_text_fmt(can_info, "Transceiver SN65HVD230, TX = IO%d, RX = IO%d, 500 kbps",
-                          CAN_TX_PIN, CAN_RX_PIN);
-    btn_can = make_button(list, "Test CAN", can_test_cb, NULL);
-    lv_obj_set_size(btn_can, 200, 46);
-    lbl_can = add_text(list, COLOR_DIM);
-    lv_label_set_text(lbl_can, "Test sprawdza tor TX -> transceiver -> RX bez auta.");
-    lv_obj_t *warn = add_text(list, COLOR_ACCENT);
-    lv_label_set_text(warn, "Test nadaje ramki - uruchamiaj tylko z wtyczka OBD odlaczona od auta.");
-    lv_obj_set_style_pad_bottom(warn, 20, 0);
+    lv_label_set_text(restart_hint, "Katalog wczytuje sie przy starcie - po wgraniu nowych plikow uruchom ponownie "
+                                    "(przycisk u gory).");
+    lv_obj_set_style_pad_bottom(restart_hint, 20, 0);
 }
 
 void info_page_open() {

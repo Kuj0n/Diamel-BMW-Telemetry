@@ -1,9 +1,11 @@
 #include "catalog.h"
+#include "psram.h"
 #include <Arduino.h>
 #include <SD.h>
 #include <algorithm>
 #include <ctype.h>
 #include "logger.h"
+#include "settings.h"
 #include "telemetry.h"
 
 #define LINE_LEN 768
@@ -40,7 +42,7 @@ struct DtcIndex {
     uint32_t offset;
     uint16_t count;
 };
-static DtcIndex dtc_index[256];
+static DtcIndex *dtc_index; // 256 adresów, w PSRAM
 static volatile bool done;
 static SemaphoreHandle_t done_sem;
 
@@ -279,6 +281,8 @@ static void load_params() {
 static bool index_dtc_file() {
     File f = open_catalog("bledy.csv");
     if (!f) return false;
+    if (!dtc_index) dtc_index = psram_alloc<DtcIndex>(256);
+    if (!dtc_index) return false;
     LineReader r(f);
     char line[LINE_LEN], *fl[5];
     read_header(r, line, sizeof(line));
@@ -457,7 +461,9 @@ static bool contains_ci(const char *text, const char *needle) {
 }
 
 int params_search(int module, const char *query, int offset, ParamIdx *out, int max, bool all) {
-    int from = 0, to = params_count();
+    bool demo = g_settings.data_source == SRC_DEMO;
+    if (module == MODULE_DEMO && !demo) return 0;
+    int from = demo ? 0 : P_COUNT, to = params_count(); // bez DEMO pomijamy wartości symulacji
     if (module >= 0 && module < modules_count()) {
         from = modules[module].first;
         to = from + modules[module].count;
@@ -477,7 +483,8 @@ int params_search(int module, const char *query, int offset, ParamIdx *out, int 
 template <typename Fn>
 static void for_each_dtc(uint8_t addr, Fn fn) {
     char line[LINE_LEN], *fl[5];
-    const DtcIndex &d = dtc_index[addr];
+    static const DtcIndex none = {};
+    const DtcIndex &d = dtc_index ? dtc_index[addr] : none;
     if (d.count) {
         File f = open_catalog("bledy.csv");
         if (!f || !f.seek(d.offset)) return;
