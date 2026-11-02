@@ -8,8 +8,10 @@
 private/
 docs/private/
 
-# Przykladowe programy producenta plytki (duze, niepotrzebne w historii)
-docs/1-Demo/
+# Przykladowe programy i narzedzia producenta plytki (duze, .exe/.rar, niepotrzebne w historii)
+docs/4.0inch_ESP32-4848S040/1-Demo/
+docs/4.0inch_ESP32-4848S040/7-Character&Picture_Molding_Tool/
+docs/4.0inch_ESP32-4848S040/8-Burn operation/
 
 # Python
 __pycache__/

@@ -99,6 +99,8 @@ Projekt [PlatformIO](https://platformio.org/) (Arduino, ESP32-S3). Wersje platfo
 2. Otwórz folder projektu, podłącz płytkę kablem USB-C (port z konwerterem CH340).
 3. *PlatformIO: Upload* (pierwsza kompilacja trwa kilka minut - pobiera biblioteki).
 
+Logo BMW na ekranie startowym nie jest częścią repozytorium (znak towarowy BMW AG). Jeśli masz własny plik `src/private/bmw_logo.c` (obraz LVGL o nazwie `bmw_logo`), zostanie wkompilowany; bez niego urządzenie startuje od logo Diamel.
+
 Kolejne wersje możesz wgrywać bez kabla: strona WWW → *System* → *Aktualizacja oprogramowania* (plik `.pio/build/esp32-s3/firmware.bin` albo plik z [Releases](../../releases)).
 
 ### Pierwsze uruchomienie
@@ -141,6 +143,22 @@ Sterownik silnika B47 odrzuca zwykły odczyt pomiarów (`7F 22 31`) - urządzeni
 - Licencja komercyjna - kontakt przez [diamel.pl](https://diamel.pl).
 
 Wiążący jest angielski tekst licencji w [LICENSE.md](LICENSE.md).
+
+### Biblioteki zewnętrzne
+
+Licencja PolyForm dotyczy tylko kodu tego projektu. Biblioteki zachowują własne licencje; pliki `firmware.bin` zawierają je w postaci skompilowanej.
+
+| Biblioteka | Wersja | Licencja |
+|---|---|---|
+| [Arduino core for ESP32](https://github.com/espressif/arduino-esp32) (Wi-Fi, BLE, SD, Preferences, Update) | platforma `espressif32` 8.0.0 | LGPL-2.1-or-later |
+| [ESP-IDF](https://github.com/espressif/esp-idf) (TWAI/CAN, sterownik ekranu RGB, NimBLE) | w pakiecie platformy | Apache-2.0 |
+| [LVGL](https://github.com/lvgl/lvgl) | 8.4.0 | MIT |
+| [GFX Library for Arduino](https://github.com/moononournation/Arduino_GFX) | 1.6.9 | BSD (Adafruit) |
+| [AsyncTCP](https://github.com/ESP32Async/AsyncTCP) | 3.5.0 | LGPL-3.0 |
+| [ESPAsyncWebServer](https://github.com/ESP32Async/ESPAsyncWebServer) | 3.12.1 | LGPL-3.0 |
+| [ArduinoJson](https://github.com/bblanchon/ArduinoJson) | 7.4.3 | MIT |
+
+Biblioteki na LGPL: pełny kod projektu jest w tym repozytorium, więc każdy może zbudować firmware z własną, zmienioną wersją tych bibliotek (wymóg LGPL). Pełne teksty licencji są w repozytoriach bibliotek, linki w tabeli.
 
 ## Uwagi
 

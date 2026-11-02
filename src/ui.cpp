@@ -11,7 +11,8 @@
 #include "wifi_web.h"
 
 extern const lv_img_dsc_t diamel_logo;
-extern const lv_img_dsc_t bmw_logo;
+// Logo BMW (znak towarowy) jest poza repozytorium: src/private/bmw_logo.c. Bez tego pliku start od logo Diamel
+extern const lv_img_dsc_t bmw_logo __attribute__((weak));
 
 #define UI_REFRESH_MS 100
 #define SWIPE_PAGES 3 // Odczyty 1-3 - kolejne kafelki tileview
@@ -674,14 +675,17 @@ void ui_init() {
 
     // Oś czasu: BMW rozjaśnia się (0-0.6 s), gaśnie (1.6-2.0 s), Diamel rozjaśnia się (2.0-2.7 s),
     // od 4.3 s ekran ładowania katalogu z paskiem postępu, potem strony
-    splash_bmw = splash_image(scr, &bmw_logo);
     splash_diamel = splash_image(scr, &diamel_logo);
-    lv_obj_add_flag(splash_diamel, LV_OBJ_FLAG_HIDDEN);
     display_set_brightness(0);
     backlight_fade(0, g_settings.brightness, 600, NULL);
 
-    lv_timer_t *t = lv_timer_create(splash_bmw_end, 1600, NULL);
-    lv_timer_set_repeat_count(t, 1);
+    lv_timer_t *t;
+    if (&bmw_logo) {
+        splash_bmw = splash_image(scr, &bmw_logo);
+        lv_obj_add_flag(splash_diamel, LV_OBJ_FLAG_HIDDEN);
+        t = lv_timer_create(splash_bmw_end, 1600, NULL);
+        lv_timer_set_repeat_count(t, 1);
+    }
     t = lv_timer_create(splash_end, 4300, NULL);
     lv_timer_set_repeat_count(t, 1);
 }
