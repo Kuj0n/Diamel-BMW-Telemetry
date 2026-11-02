@@ -2,8 +2,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
-// Komunikacja z autem - odczyt. Jedyny zapis: kasowanie kodów błędów jednego sterownika (uds_clear_dtc),
-// wyłącznie na wyraźne polecenie z ekranu Błędy.
+// Komunikacja z autem - odczyt. Zapisy tylko na wyraźne polecenie, każdy w osobnej funkcji:
+// kasowanie kodów błędów jednego sterownika (uds_clear_dtc) i zgłoszenie regeneracji DPF (uds_dpf_regen).
 // Transport: transceiver CAN w gnieździe OBD (D-CAN 500 kbit/s), ISO-TP z adresowaniem rozszerzonym BMW:
 // zapytanie CAN ID 0x6F1 [adres sterownika, PCI, dane], odpowiedź 0x600+adres [0xF1, PCI, dane].
 // Blokada usług: przepuszczane są wyłącznie 0x22 (odczyt DID), 0x19 (odczyt błędów), 0x3E (podtrzymanie)
@@ -40,6 +40,11 @@ bool uds_release();
 // Kasowanie wszystkich kodów błędów jednego sterownika: UDS 14 FF FF FF (gdy sterownik wymaga - w sesji 10 03).
 // Jedyna usługa zapisu w urządzeniu; nie da się nią wysłać nic innego.
 UdsResult uds_clear_dtc(uint8_t ecu, uint8_t *nrc);
+// Zgłoszenie regeneracji DPF w DDE (0x12) tak jak zadanie BMW ABGLEICH_CSF_PROG, tryb 6 (EEPROM), pole TLRG:
+// odczyt rekordu CSF (22 5FB4) -> ten sam rekord z NUMID = 06 07 i TLRG (bajty 16-19) = 0 -> 2E 5FB4 ->
+// ponowny odczyt i sprawdzenie, że poza NUMID i TLRG nic się nie zmieniło. Warunki wypalania pilnuje DDE.
+// msg = opis wyniku po polsku.
+UdsResult uds_dpf_regen(char *msg, size_t len);
 // Próba zestawu dynamicznego (test parametrów): definiuje F303 z podanych DID (pozycja 1, rozmiar),
 // czyta go i czyści. resp = odpowiedź na 22 F303 (albo odmowa definicji).
 UdsResult uds_block_probe(uint8_t ecu, const uint16_t *dids, const uint8_t *sizes, int n, uint8_t *resp, size_t cap,

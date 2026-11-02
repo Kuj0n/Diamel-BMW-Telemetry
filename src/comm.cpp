@@ -310,6 +310,79 @@ void uds_last_rx(UdsRxDebug &out) {
 
 static uint32_t *block_sig(uint8_t addr);
 
+#define DDE_ADDR 0x12
+#define CSF_NUMID 4  // pozycje w rekordzie CSF liczone od bajtu usługi (tabela CSF_WERTE)
+#define CSF_TLRG 16
+#define CSF_MIN_LEN 20
+
+static bool csf_changeable(size_t i) {
+    return i == CSF_NUMID || i == CSF_NUMID + 1 || (i >= CSF_TLRG && i < CSF_TLRG + 4);
+}
+
+UdsResult uds_dpf_regen(char *msg, size_t len) {
+    if (g_settings.data_source != SRC_CAN_DIRECT) {
+        snprintf(msg, len, "Dostepne tylko przy polaczeniu CAN");
+        return UDS_NO_TRANSPORT;
+    }
+    static uint8_t before[160], req[160], after[160];
+    size_t nb = 0, na = 0, l = 0;
+    const uint8_t rd[3] = {0x22, 0x5F, 0xB4};
+    const uint8_t ext[2] = {0x10, 0x03}, def[2] = {0x10, 0x01};
+    uint8_t tmp[16];
+    xSemaphoreTake(bus_lock, portMAX_DELAY);
+    UdsResult r = can_request(DDE_ADDR, rd, 3, before, sizeof(before), &nb, 1000);
+    // Rekord musi wyglądać jak w zadaniu BMW: 62 5F B4 04 ...
+    if (r != UDS_OK || nb < CSF_MIN_LEN || nb > sizeof(req) || before[0] != 0x62 || before[1] != 0x5F ||
+        before[2] != 0xB4 || before[3] != 0x04) {
+        xSemaphoreGive(bus_lock);
+        snprintf(msg, len, "Nie odczytano rekordu DPF (5FB4): %s", r == UDS_OK ? "nieznany format" : uds_result_text(r));
+        return r == UDS_OK ? UDS_NEGATIVE : r;
+    }
+    memcpy(req, before, nb);
+    req[0] = 0x2E;
+    req[CSF_NUMID] = 0x06;     // SERVICEFALLNR 6 = EEPROM (pojedyncza wartość)
+    req[CSF_NUMID + 1] = 0x07; // ABID 07 = TLRG
+    memset(req + CSF_TLRG, 0, 4);
+    r = can_request(DDE_ADDR, req, nb, tmp, sizeof(tmp), &l, 3000);
+    bool session = false;
+    if (r == UDS_NEGATIVE && l >= 3 && (tmp[2] == 0x7F || tmp[2] == 0x22)) {
+        // Zapis niedostępny w zwykłej sesji - jeszcze raz w rozszerzonej
+        size_t sl = 0;
+        if (can_request(DDE_ADDR, ext, 2, tmp, sizeof(tmp), &sl, 1000) == UDS_OK) {
+            session = true;
+            r = can_request(DDE_ADDR, req, nb, tmp, sizeof(tmp), &l, 3000);
+        }
+    }
+    uint8_t nrc = r == UDS_NEGATIVE && l >= 3 ? tmp[2] : 0;
+    bool written = r == UDS_OK && l >= 1 && tmp[0] == 0x6E;
+    UdsResult rr = can_request(DDE_ADDR, rd, 3, after, sizeof(after), &na, 1000);
+    if (session) {
+        size_t sl = 0;
+        can_request(DDE_ADDR, def, 2, tmp, sizeof(tmp), &sl, 1000);
+    }
+    xSemaphoreGive(bus_lock);
+
+    // Kontrola: poza NUMID i TLRG rekord ma być taki sam jak przed zapisem
+    int changed = -1;
+    if (rr == UDS_OK && na == nb) {
+        changed = 0;
+        for (size_t i = 3; i < nb; i++) {
+            if (!csf_changeable(i) && after[i] != before[i]) changed++;
+        }
+    }
+    Serial.printf("Regeneracja DPF: zapis %s (kod 0x%02X), %u B, zmienione inne bajty: %d\n",
+                  written ? "OK" : uds_result_text(r), nrc, (unsigned)nb, changed);
+    if (!written) {
+        if (nrc) snprintf(msg, len, "DDE odmowilo (kod 0x%02X)%s", nrc, nrc == 0x33 ? " - wymaga zabezpieczenia" : "");
+        else snprintf(msg, len, "Zapis nieudany: %s", uds_result_text(r));
+        return r == UDS_OK ? UDS_NO_REPLY : r;
+    }
+    if (changed < 0) snprintf(msg, len, "Zgloszono regeneracje (nie udalo sie sprawdzic rekordu)");
+    else if (changed > 0) snprintf(msg, len, "Zgloszono regeneracje - UWAGA: zmienilo sie %d innych bajtow rekordu", changed);
+    else snprintf(msg, len, "Zgloszono regeneracje - DDE wypali filtr, gdy warunki beda spelnione");
+    return UDS_OK;
+}
+
 UdsResult uds_clear_dtc(uint8_t ecu, uint8_t *nrc) {
     *nrc = 0;
     if (g_settings.data_source != SRC_CAN_DIRECT) return UDS_NO_TRANSPORT;

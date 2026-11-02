@@ -2,7 +2,7 @@
 
 Wyświetlacz telemetrii do BMW serii F (testowane auto: **F31 320d xDrive, silnik B47, sterownik DDE D70BX7A0**), zbudowany na 4-calowym dotykowym panelu z ESP32-S3. Podłącza się do gniazda OBD, czyta na żywo wartości ze sterowników auta i pokazuje je na ekranie, na wykresie oraz w przeglądarce telefonu.
 
-> Status: **wersja 0.14 - działa w aucie.** Połączenie CAN, bieżące odczyty (w tym sterownik silnika), OBD-II i odczyt kodów błędów są sprawdzone w F31. Kafelek DPF i kasowanie błędów są nowe - jeszcze bez testu w aucie.
+> Status: **wersja 0.15-test (wydanie testowe)** - nowe: wymuszenie regeneracji DPF, odczyt „regeneracja trwa”. Wersja 0.14 działa w aucie. Połączenie CAN, bieżące odczyty (w tym sterownik silnika), OBD-II i odczyt kodów błędów są sprawdzone w F31. Kafelek DPF i kasowanie błędów są nowe - jeszcze bez testu w aucie.
 
 <!-- Zrzuty ekranu: docs/screenshots/ (zrób je funkcją "Zrzut ekranu" na stronie WWW urządzenia) -->
 
@@ -19,8 +19,9 @@ Urządzenie służy do **odczytu**. Lista dozwolonych usług jest zaszyta w kodz
 | UDS `3E` | podtrzymanie sesji | - |
 | OBD-II tryb `01` | standardowe wartości silnika | odczyt |
 | UDS `14 FF FF FF` | **kasowanie kodów błędów jednego modułu** - tylko na wyraźne polecenie (dwa dotknięcia przy wybranym module) | zapis |
+| UDS `2E 5F B4` (tylko DDE) | **zgłoszenie regeneracji DPF**: ten sam rekord DPF odczytany ze sterownika, zmieniony wyłącznie licznik `TLRG` (jak zadanie BMW `ABGLEICH_CSF_PROG`, tryb 6); po zapisie urządzenie sprawdza, że nic innego się nie zmieniło. Warunki wypalania pilnuje DDE | zapis |
 
-Nie ma kodowania, programowania, adaptacji ani zapisów do pamięci sterowników.
+Nie ma kodowania, programowania ani innych zapisów do pamięci sterowników.
 
 ## Możliwości
 
@@ -123,7 +124,7 @@ Sterownik silnika B47 odrzuca zwykły odczyt pomiarów (`7F 22 31`) - urządzeni
 - [x] Połączenie z autem (F31): CAN, bieżące odczyty (w tym DDE przez zestaw F303), OBD-II, kody błędów
 - [x] Odpytywanie tylko widocznego ekranu, wskaźnik szybkości, log z bieżącego ekranu
 - [ ] **Test w aucie**: kafelek DPF, kasowanie błędów, test zestawu F303 → lista działających pomiarów DDE w katalogu
-- [ ] **Wymuszenie regeneracji DPF** - wymaga zapisu do pamięci adaptacji sterownika silnika; najpierw potwierdzenie dokładnej sekwencji (zapis komunikacji z testera, który to robi)
+- [ ] **Wymuszenie regeneracji DPF** - zrobione (kafelek DPF), do sprawdzenia w aucie
 - [ ] **Odczyt przez adapter BLE (ELM327)** - wyszukiwanie, połączenie i test adaptera już są; brakuje zapytań UDS przez adapter (adapter z Bluetooth LE, np. vLinker MC+, OBDLink CX)
 - [ ] **Zegar RTC DS3231** - obsługa jest, brak sprawdzenia na sprzęcie
 - [ ] Procent spięcia xDrive, wartości min/max, progi ostrzegawcze

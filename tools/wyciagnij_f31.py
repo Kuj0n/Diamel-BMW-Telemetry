@@ -67,6 +67,18 @@ OBD_PIDS = [
 ]
 
 
+# Wartości wyliczane tak jak w zadaniach BMW (ten sam DID, inna maska) - adres, klucz, nazwa, DID, typ, maska.
+# STATUS_REGENERATION_CSF: "regeneracja trwa" = (CoEOM_stOpModeAct, DID 467E, U32) & 0x02.
+DERIVED = [
+    ("12", "regeneracja_trwa", "DPF: regeneracja trwa", "467E", "U32", "0x2"),
+]
+
+
+def derived_rows():
+    return [[addr, key, name, did, typ, "0", mask, "BE", "1", "0", "", "0", "", "wyliczane jak STATUS_REGENERATION_CSF",
+             "1"] for addr, key, name, did, typ, mask in DERIVED]
+
+
 def obd_rows():
     rows = []
     for pid, name, typ, pos, mul, add, unit, dec, basic in OBD_PIDS:
@@ -718,7 +730,7 @@ def main():
                 seen.add((row[0], row[2]))
             basic += row[-1] == "1"
             f.write(";".join(row) + "\n")
-        for row in obd_rows():
+        for row in derived_rows() + obd_rows():
             basic += row[-1] == "1"
             f.write(";".join(row) + "\n")
     print(f"Lista podstawowa: {basic} parametrow (pozostale w 'wszystkie')")

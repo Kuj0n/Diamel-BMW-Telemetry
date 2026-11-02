@@ -19,18 +19,49 @@ static const DpfItem ITEMS[] = {
     {"12:regeneration_blockierung_und_freigabe_wert", "Blokada regeneracji"},
     {"12:strecke_seit_erfolgreicher_regeneration_wert", "Od regeneracji"},
     {"12:pfltrgn_tisncergn_wert", "Czas od regeneracji"},
-    {"12:durchschnitt_kilometer_zwischen_regeneration", "Sredni odstep"},
+    {"12:regeneracja_trwa", "Regeneracja trwa"},
     {"12:pfltrgn_ctrgnsuceep_mp_wert", "Liczba regeneracji"},
     {"12:pfltrgn_numrgn_wert", "Zadanie regeneracji"},
     {"12:status_regeneration_unterbrochen_wert", "Regeneracja przerwana"},
 };
 #define DPF_N (sizeof(ITEMS) / sizeof(ITEMS[0]))
+#define DPF_CELL_H 60 // 6 wierszy + przycisk regeneracji bez przewijania
 
 static uint16_t ids[DPF_N];
 static int count = 0;
 static lv_obj_t *page_obj;
 static lv_obj_t *lbl_value[DPF_N];
 static bool built = false;
+static lv_obj_t *btn_regen;
+static lv_obj_t *lbl_regen;
+static uint32_t armed_ms = 0;
+
+static void run_regen(lv_timer_t *) {
+    static char msg[96];
+    UdsResult r = uds_dpf_regen(msg, sizeof(msg));
+    lv_label_set_text(lbl_regen, msg);
+    lv_obj_set_style_text_color(lbl_regen, r == UDS_OK ? lv_color_hex(0x81C784) : COLOR_REC_ON, 0);
+    lv_obj_clear_state(btn_regen, LV_STATE_DISABLED);
+}
+
+// Pierwsze dotknięcie: "Na pewno?", drugie w ciągu 4 s wysyła zgłoszenie do DDE
+static void regen_cb(lv_event_t *) {
+    lv_obj_t *l = lv_obj_get_child(btn_regen, 0);
+    if (!armed_ms || millis() - armed_ms > 4000) {
+        armed_ms = millis();
+        lv_label_set_text(l, "Na pewno?");
+        lv_obj_set_style_bg_color(btn_regen, lv_color_hex(0xB71C1C), 0);
+        return;
+    }
+    armed_ms = 0;
+    lv_label_set_text(l, LV_SYMBOL_CHARGE " Wymus regeneracje");
+    lv_obj_set_style_bg_color(btn_regen, COLOR_BTN, 0);
+    lv_obj_add_state(btn_regen, LV_STATE_DISABLED);
+    lv_label_set_text(lbl_regen, "Wysylanie do DDE...");
+    lv_obj_set_style_text_color(lbl_regen, COLOR_DIM, 0);
+    lv_timer_t *t = lv_timer_create(run_regen, 50, NULL); // po odświeżeniu napisu
+    lv_timer_set_repeat_count(t, 1);
+}
 
 static void build_cells() {
     lv_obj_clean(page_obj);
@@ -41,8 +72,8 @@ static void build_cells() {
         int pos = count;
         ids[count++] = id;
         lv_obj_t *cell = plain_cont(page_obj);
-        lv_obj_set_size(cell, 220, 70);
-        lv_obj_set_pos(cell, 20 + (pos % 2) * 235, 4 + (pos / 2) * 70);
+        lv_obj_set_size(cell, 220, DPF_CELL_H);
+        lv_obj_set_pos(cell, 20 + (pos % 2) * 235, 4 + (pos / 2) * DPF_CELL_H);
         lv_obj_set_flex_flow(cell, LV_FLEX_FLOW_COLUMN);
         make_label(cell, &lv_font_montserrat_16, COLOR_ACCENT, it.label);
         lv_obj_t *row = plain_cont(cell);
@@ -55,6 +86,17 @@ static void build_cells() {
         lv_obj_t *u = make_label(row, &lv_font_montserrat_16, COLOR_DIM, unit);
         lv_obj_set_style_pad_left(u, 6, 0);
         lv_obj_set_style_pad_bottom(u, 5, 0);
+    }
+    if (count) {
+        // Pod wartościami: zgłoszenie regeneracji (DDE samo sprawdza warunki: temperatura, prędkość, blokady)
+        int y = 4 + ((count + 1) / 2) * DPF_CELL_H + 6;
+        btn_regen = make_button(page_obj, LV_SYMBOL_CHARGE " Wymus regeneracje", regen_cb, NULL);
+        lv_obj_set_size(btn_regen, 260, 44);
+        lv_obj_set_pos(btn_regen, 20, y);
+        lbl_regen = make_label(page_obj, &lv_font_montserrat_16, COLOR_DIM, "Dwa dotkniecia. Wypalanie\nwlaczy DDE.");
+        lv_obj_set_pos(lbl_regen, 292, y);
+        lv_obj_set_width(lbl_regen, 170);
+        lv_label_set_long_mode(lbl_regen, LV_LABEL_LONG_WRAP);
     }
     if (!count) {
         lv_obj_t *l = make_label(page_obj, &lv_font_montserrat_20, COLOR_DIM,
